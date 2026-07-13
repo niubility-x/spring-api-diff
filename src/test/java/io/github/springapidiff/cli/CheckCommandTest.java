@@ -56,6 +56,52 @@ class CheckCommandTest {
         assertThat(result.output).contains("Base: main", "Head: worktree", "Response field 'email' was removed.");
     }
 
+    @Test
+    void printsFriendlyMessageWhenRepoIsMissing() throws Exception {
+        Path notRepo = tempDir.resolve("not-repo");
+        Files.createDirectories(notRepo);
+
+        CommandResult result = runCheck("--repo", notRepo.toString());
+
+        assertThat(result.exitCode).isEqualTo(2);
+        assertThat(result.errorOutput).contains("not a Git repository", "--repo <path>");
+    }
+
+    @Test
+    void printsFriendlyMessageWhenBaseCannotBeDetected() throws Exception {
+        Path repo = tempDir.resolve("dev-repo");
+        Files.createDirectories(repo);
+        git(repo, "init", "-b", "dev");
+        git(repo, "config", "user.name", "test");
+        git(repo, "config", "user.email", "test@example.com");
+        Files.createDirectories(repo.resolve("src/main/java/com/example"));
+        Files.write(repo.resolve("src/main/java/com/example/App.java"), "package com.example; class App {}".getBytes(StandardCharsets.UTF_8));
+        git(repo, "add", ".");
+        git(repo, "commit", "-m", "initial");
+
+        CommandResult result = runCheck("--repo", repo.toString());
+
+        assertThat(result.exitCode).isEqualTo(2);
+        assertThat(result.errorOutput).contains("No base ref could be detected", "origin/main", "--base origin/main");
+    }
+
+    @Test
+    void warnsWhenNoControllersAreScanned() throws Exception {
+        Path repo = tempDir.resolve("empty-api-repo");
+        Files.createDirectories(repo.resolve("src/main/java/com/example"));
+        git(repo, "init", "-b", "main");
+        git(repo, "config", "user.name", "test");
+        git(repo, "config", "user.email", "test@example.com");
+        Files.write(repo.resolve("src/main/java/com/example/App.java"), "package com.example; class App {}".getBytes(StandardCharsets.UTF_8));
+        git(repo, "add", ".");
+        git(repo, "commit", "-m", "initial");
+
+        CommandResult result = runCheck("--repo", repo.toString(), "--base", "main", "--head", "HEAD");
+
+        assertThat(result.exitCode).isEqualTo(0);
+        assertThat(result.output).contains("Warning: No Spring Controller endpoints were found", "Possible causes");
+    }
+
     private Path initRepoWithFixture(String fixture) throws Exception {
         Path repo = tempDir.resolve("repo-" + fixture);
         Files.createDirectories(repo);
@@ -86,13 +132,20 @@ class CheckCommandTest {
 
     private CommandResult runCheck(String... args) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ByteArrayOutputStream errorOutput = new ByteArrayOutputStream();
         PrintStream originalOut = System.out;
+        PrintStream originalErr = System.err;
         System.setOut(new PrintStream(output, true, StandardCharsets.UTF_8.name()));
+        System.setErr(new PrintStream(errorOutput, true, StandardCharsets.UTF_8.name()));
         try {
             int exitCode = new CommandLine(new CheckCommand()).execute(args);
-            return new CommandResult(exitCode, new String(output.toByteArray(), StandardCharsets.UTF_8));
+            return new CommandResult(
+                exitCode,
+                new String(output.toByteArray(), StandardCharsets.UTF_8),
+                new String(errorOutput.toByteArray(), StandardCharsets.UTF_8));
         } finally {
             System.setOut(originalOut);
+            System.setErr(originalErr);
         }
     }
 
@@ -140,10 +193,12 @@ class CheckCommandTest {
     private static class CommandResult {
         private final int exitCode;
         private final String output;
+        private final String errorOutput;
 
-        private CommandResult(int exitCode, String output) {
+        private CommandResult(int exitCode, String output, String errorOutput) {
             this.exitCode = exitCode;
             this.output = output;
+            this.errorOutput = errorOutput;
         }
     }
 }
