@@ -1,0 +1,169 @@
+# spring-api-diff
+
+spring-api-diff 是一个面向 Spring Boot 项目的 REST API 兼容性检查工具。它的重点不是替代 Swagger 文档，而是在开发、提交、PR 或 CI 阶段自动判断接口改动是否会破坏已有调用方。
+
+一句话：改完接口后，运行一条命令，知道这次改动有没有 BREAKING CHANGE。
+
+## 核心价值
+
+- 自动比较 Git 基准分支和当前代码的 Spring REST API。
+- 识别删除接口、新增必填参数、字段类型变化、删除响应字段等高风险变更。
+- 将变更分为 BREAKING、WARNING、NON_BREAKING，帮助团队判断兼容性风险。
+- 支持 `--fail-on-breaking`，可以作为 CI 门禁阻止破坏性接口变更合并。
+- 生成 Markdown 报告，方便在 PR、发布说明或团队评审中使用。
+
+## 环境要求
+
+- JDK 8 或更高版本
+- Maven 3.6 或更高版本
+- Git
+
+## 构建
+
+```bash
+mvn clean package
+```
+
+构建完成后，可执行 Jar 位于 `target/spring-api-diff-0.1.0-SNAPSHOT.jar`。
+
+## 推荐用法：一键检查当前改动
+
+在 Spring Boot 项目仓库中运行：
+
+```bash
+java -jar /path/to/spring-api-diff-0.1.0-SNAPSHOT.jar check
+```
+
+默认行为：
+
+1. 自动选择基准分支：优先 `origin/main`，其次 `main`，最后 `master`。
+2. 如果当前工作区有未提交改动，则比较基准分支和当前工作区。
+3. 如果工作区干净，则比较基准分支和 `HEAD`。
+4. 输出 API 兼容性摘要和变更列表。
+
+示例输出：
+
+```text
+API compatibility check
+
+Base: origin/main
+Head: worktree
+
+Changes: 3
+- BREAKING: 1
+- WARNING: 1
+- NON_BREAKING: 1
+
+BREAKING
+- GET /api/users/{id} | Response field 'email' was removed. (String -> -)
+```
+
+## 常见场景
+
+### 改完接口但还没提交
+
+```bash
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check --base main --worktree
+```
+
+### 已经提交到当前分支
+
+```bash
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check --base main --head HEAD
+```
+
+### 在 CI 中作为门禁
+
+```bash
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check \
+  --base origin/main \
+  --head HEAD \
+  --fail-on-breaking
+```
+
+如果存在 BREAKING 变更，命令会返回非零退出码。
+
+### 输出 Markdown 报告
+
+```bash
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check \
+  --base origin/main \
+  --head HEAD \
+  --report api-diff.md
+```
+
+## check 命令参数
+
+- `--repo`：Git 仓库路径，默认当前目录。
+- `--base`：基准 Git ref，例如 `origin/main`、`main`、某个 commit 或 tag。
+- `--head`：新版本 Git ref，例如 `HEAD` 或某个分支。
+- `--worktree`：用当前工作区作为新版本，包含未提交改动。
+- `--report`：输出 Markdown 报告文件。
+- `--fail-on-breaking`：存在 BREAKING 变更时返回非零退出码。
+- `--include`：只扫描指定包名前缀下的 Controller。
+- `--exclude`：排除指定包名前缀下的 Controller。
+
+## 变更等级
+
+### BREAKING
+
+可能破坏已有调用方的变更，例如：
+
+- 删除接口
+- 删除路径变量
+- 新增必填查询参数
+- 查询参数类型变化
+- 新增必填请求体字段
+- 请求体字段类型变化
+- 删除响应字段
+- 响应字段类型变化
+
+### WARNING
+
+需要人工确认风险的变更，例如：
+
+- 删除查询参数
+- 删除请求体字段
+
+### NON_BREAKING
+
+通常兼容的变更，例如：
+
+- 新增接口
+- 新增响应字段
+
+## 高级用法：快照模式
+
+`check` 是普通用户主入口。底层仍保留 `snapshot` 和 `diff`，适合需要缓存历史快照或自定义流水线的场景。
+
+### 生成 API 快照
+
+```bash
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar snapshot \
+  --project /path/to/spring-boot-project \
+  --out old.json
+```
+
+### 对比 API 快照
+
+```bash
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar diff \
+  --old old.json \
+  --new new.json \
+  --report report.md \
+  --fail-on-breaking
+```
+
+## 测试
+
+```bash
+mvn test
+```
+
+## 许可协议
+
+本项目采用 MIT License，版权所有 (c) 2026 niubility。
+
+你可以自由使用、复制、修改、分发或商用本项目代码，但必须在副本或主要部分中保留原始版权声明和许可协议文本，以声明原作者来源。
+
+MIT License 不影响作者未来基于本项目推出额外的商业版、收费版或闭源增值功能。
