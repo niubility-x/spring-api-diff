@@ -13,6 +13,9 @@ import com.github.javaparser.ast.expr.NormalAnnotationExpr;
 import com.github.javaparser.ast.expr.SingleMemberAnnotationExpr;
 import com.github.javaparser.ast.expr.StringLiteralExpr;
 import com.github.javaparser.ast.nodeTypes.NodeWithAnnotations;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -27,40 +30,63 @@ public class SpringAnnotationParser {
         return findAnnotation(node, simpleName).isPresent();
     }
 
+    public boolean hasAnyAnnotation(NodeWithAnnotations<?> node, String... simpleNames) {
+        for (String simpleName : simpleNames) {
+            if (hasAnnotation(node, simpleName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public Optional<MappingInfo> mapping(AnnotationExpr annotation) {
+        List<MappingInfo> mappings = mappings(annotation);
+        return mappings.isEmpty() ? Optional.empty() : Optional.of(mappings.get(0));
+    }
+
+    public List<MappingInfo> mappings(AnnotationExpr annotation) {
         String name = simpleName(annotation);
         switch (name) {
             case "GetMapping":
-                return Optional.of(new MappingInfo("GET", path(annotation).orElse("/")));
+                return fixedMethodMappings("GET", annotation);
             case "PostMapping":
-                return Optional.of(new MappingInfo("POST", path(annotation).orElse("/")));
+                return fixedMethodMappings("POST", annotation);
             case "PutMapping":
-                return Optional.of(new MappingInfo("PUT", path(annotation).orElse("/")));
+                return fixedMethodMappings("PUT", annotation);
             case "PatchMapping":
-                return Optional.of(new MappingInfo("PATCH", path(annotation).orElse("/")));
+                return fixedMethodMappings("PATCH", annotation);
             case "DeleteMapping":
-                return Optional.of(new MappingInfo("DELETE", path(annotation).orElse("/")));
+                return fixedMethodMappings("DELETE", annotation);
             case "RequestMapping":
-                return Optional.of(new MappingInfo(httpMethod(annotation).orElse("GET"), path(annotation).orElse("/")));
+                return requestMappings(annotation);
             default:
-                return Optional.empty();
+                return Collections.emptyList();
         }
     }
 
     public Optional<String> path(AnnotationExpr annotation) {
+        List<String> values = paths(annotation);
+        return values.isEmpty() ? Optional.empty() : Optional.of(values.get(0));
+    }
+
+    public List<String> paths(AnnotationExpr annotation) {
         if (annotation instanceof SingleMemberAnnotationExpr) {
             SingleMemberAnnotationExpr singleMember = (SingleMemberAnnotationExpr) annotation;
-            return stringValue(singleMember.getMemberValue());
+            return stringValues(singleMember.getMemberValue());
         }
         if (annotation instanceof NormalAnnotationExpr) {
             NormalAnnotationExpr normal = (NormalAnnotationExpr) annotation;
-            Optional<String> path = pairValue(normal.getPairs(), "path").flatMap(this::stringValue);
-            if (path.isPresent()) {
+            List<String> path = pairValue(normal.getPairs(), "path")
+                .map(this::stringValues)
+                .orElse(Collections.emptyList());
+            if (!path.isEmpty()) {
                 return path;
             }
-            return pairValue(normal.getPairs(), "value").flatMap(this::stringValue);
+            return pairValue(normal.getPairs(), "value")
+                .map(this::stringValues)
+                .orElse(Collections.emptyList());
         }
-        return Optional.empty();
+        return Collections.emptyList();
     }
 
     public Optional<String> namedValue(AnnotationExpr annotation) {
@@ -80,9 +106,14 @@ public class SpringAnnotationParser {
     }
 
     public boolean required(Parameter parameter, String annotationName, boolean defaultValue) {
-        return findAnnotation(parameter, annotationName)
-            .flatMap(this::required)
-            .orElse(defaultValue);
+        Optional<AnnotationExpr> annotation = findAnnotation(parameter, annotationName);
+        if (!annotation.isPresent()) {
+            return defaultValue;
+        }
+        if ("RequestParam".equals(annotationName) && hasPair(annotation.get(), "defaultValue")) {
+            return false;
+        }
+        return required(annotation.get()).orElse(defaultValue);
     }
 
     public Optional<Boolean> required(AnnotationExpr annotation) {
@@ -93,14 +124,49 @@ public class SpringAnnotationParser {
         return Optional.empty();
     }
 
-    private Optional<String> httpMethod(AnnotationExpr annotation) {
+    public boolean hasPair(AnnotationExpr annotation, String name) {
+        if (annotation instanceof NormalAnnotationExpr) {
+            NormalAnnotationExpr normal = (NormalAnnotationExpr) annotation;
+            return pairValue(normal.getPairs(), name).isPresent();
+        }
+        return false;
+    }
+
+    private List<MappingInfo> fixedMethodMappings(String method, AnnotationExpr annotation) {
+        List<MappingInfo> mappings = new ArrayList<>();
+        for (String path : pathOrRoot(annotation)) {
+            mappings.add(new MappingInfo(method, path));
+        }
+        return mappings;
+    }
+
+    private List<MappingInfo> requestMappings(AnnotationExpr annotation) {
+        List<String> methods = httpMethods(annotation);
+        if (methods.isEmpty()) {
+            methods = Collections.singletonList("GET");
+        }
+        List<MappingInfo> mappings = new ArrayList<>();
+        for (String method : methods) {
+            for (String path : pathOrRoot(annotation)) {
+                mappings.add(new MappingInfo(method, path));
+            }
+        }
+        return mappings;
+    }
+
+    private List<String> pathOrRoot(AnnotationExpr annotation) {
+        List<String> values = paths(annotation);
+        return values.isEmpty() ? Collections.singletonList("/") : values;
+    }
+
+    private List<String> httpMethods(AnnotationExpr annotation) {
         if (annotation instanceof NormalAnnotationExpr) {
             NormalAnnotationExpr normal = (NormalAnnotationExpr) annotation;
             return pairValue(normal.getPairs(), "method")
-                .flatMap(this::enumValue)
-                .map(value -> value.toUpperCase(Locale.ROOT));
+                .map(this::enumValues)
+                .orElse(Collections.emptyList());
         }
-        return Optional.empty();
+        return Collections.emptyList();
     }
 
     private Optional<Expression> pairValue(NodeList<MemberValuePair> pairs, String name) {
@@ -111,31 +177,44 @@ public class SpringAnnotationParser {
     }
 
     private Optional<String> stringValue(Expression expression) {
+        List<String> values = stringValues(expression);
+        return values.isEmpty() ? Optional.empty() : Optional.of(values.get(0));
+    }
+
+    private List<String> stringValues(Expression expression) {
         if (expression instanceof StringLiteralExpr) {
             StringLiteralExpr literal = (StringLiteralExpr) expression;
-            return Optional.of(literal.asString());
+            return Collections.singletonList(literal.asString());
         }
         if (expression instanceof ArrayInitializerExpr) {
             ArrayInitializerExpr array = (ArrayInitializerExpr) expression;
-            return array.getValues().stream().findFirst().flatMap(this::stringValue);
+            List<String> values = new ArrayList<>();
+            for (Expression value : array.getValues()) {
+                values.addAll(stringValues(value));
+            }
+            return values;
         }
-        return Optional.empty();
+        return Collections.emptyList();
     }
 
-    private Optional<String> enumValue(Expression expression) {
+    private List<String> enumValues(Expression expression) {
         if (expression instanceof FieldAccessExpr) {
             FieldAccessExpr fieldAccess = (FieldAccessExpr) expression;
-            return Optional.of(fieldAccess.getNameAsString());
+            return Collections.singletonList(fieldAccess.getNameAsString().toUpperCase(Locale.ROOT));
         }
         if (expression instanceof NameExpr) {
             NameExpr name = (NameExpr) expression;
-            return Optional.of(name.getNameAsString());
+            return Collections.singletonList(name.getNameAsString().toUpperCase(Locale.ROOT));
         }
         if (expression instanceof ArrayInitializerExpr) {
             ArrayInitializerExpr array = (ArrayInitializerExpr) expression;
-            return array.getValues().stream().findFirst().flatMap(this::enumValue);
+            List<String> values = new ArrayList<>();
+            for (Expression value : array.getValues()) {
+                values.addAll(enumValues(value));
+            }
+            return values;
         }
-        return Optional.empty();
+        return Collections.emptyList();
     }
 
     private Optional<Boolean> booleanValue(Expression expression) {

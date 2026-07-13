@@ -27,24 +27,30 @@ public class ControllerScanner {
     public List<Endpoint> scan(CompilationUnit unit) {
         List<Endpoint> endpoints = new ArrayList<>();
         for (ClassOrInterfaceDeclaration type : unit.findAll(ClassOrInterfaceDeclaration.class)) {
-            if (!annotationParser.hasAnnotation(type, "RestController")) {
+            if (!isRestController(type)) {
                 continue;
             }
             String controllerName = controllerName(unit, type);
-            String classPath = annotationParser.findAnnotation(type, "RequestMapping")
-                .flatMap(annotationParser::path)
-                .orElse("/");
+            List<String> classPaths = annotationParser.findAnnotation(type, "RequestMapping")
+                .map(annotationParser::paths)
+                .filter(paths -> !paths.isEmpty())
+                .orElse(java.util.Collections.singletonList("/"));
             for (MethodDeclaration method : type.getMethods()) {
                 for (AnnotationExpr annotation : method.getAnnotations()) {
-                    Optional<SpringAnnotationParser.MappingInfo> mapping = annotationParser.mapping(annotation);
-                    if (!mapping.isPresent()) {
-                        continue;
+                    for (SpringAnnotationParser.MappingInfo mapping : annotationParser.mappings(annotation)) {
+                        for (String classPath : classPaths) {
+                            endpoints.add(endpoint(controllerName, method, classPath, mapping));
+                        }
                     }
-                    endpoints.add(endpoint(controllerName, method, classPath, mapping.get()));
                 }
             }
         }
         return endpoints;
+    }
+
+    private boolean isRestController(ClassOrInterfaceDeclaration type) {
+        return annotationParser.hasAnnotation(type, "RestController")
+            || (annotationParser.hasAnnotation(type, "Controller") && annotationParser.hasAnnotation(type, "ResponseBody"));
     }
 
     private Endpoint endpoint(
@@ -80,7 +86,7 @@ public class ControllerScanner {
             if (annotationParser.hasAnnotation(parameter, "RequestBody")) {
                 boolean required = annotationParser.required(parameter, "RequestBody", true);
                 body = new ApiBody(type, dtoScanner.fieldsFor(type).stream()
-                    .map(field -> new io.github.springapidiff.model.ApiField(field.name(), field.type(), required || field.required()))
+                    .map(field -> new io.github.springapidiff.model.ApiField(field.name(), field.type(), required && field.required()))
                     .collect(java.util.stream.Collectors.toList()));
             }
         }

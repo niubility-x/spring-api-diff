@@ -1,8 +1,25 @@
 package io.github.springapidiff.util;
 
 import com.github.javaparser.ast.type.Type;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 
 public final class TypeNameNormalizer {
+    private static final Set<String> WRAPPER_TYPES = new HashSet<>(Arrays.asList(
+        "ResponseEntity",
+        "HttpEntity",
+        "RequestEntity",
+        "Optional",
+        "List",
+        "Collection",
+        "Set",
+        "Iterable",
+        "Page",
+        "Slice",
+        "Flux",
+        "Mono"));
+
     private TypeNameNormalizer() {
     }
 
@@ -20,7 +37,7 @@ public final class TypeNameNormalizer {
 
     public static String dtoLookupName(String typeName) {
         String current = normalize(typeName);
-        while (current.contains("<") && current.endsWith(">")) {
+        while (current.contains("<") && current.endsWith(">") && WRAPPER_TYPES.contains(rawSimpleName(current))) {
             String inner = firstGenericArgument(current);
             if (inner == null || inner.equals(current)) {
                 break;
