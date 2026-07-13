@@ -23,9 +23,11 @@ class MarkdownReportWriterTest {
 
         String markdown = new MarkdownReportWriter().write(Collections.singletonList(breaking));
 
-        assertThat(markdown).contains("# API Diff Report");
+        assertThat(markdown).contains("# API Compatibility Report");
         assertThat(markdown).contains("- Breaking changes: 1");
         assertThat(markdown).contains("### GET /api/users/{id}");
         assertThat(markdown).contains("Response field 'email' was removed.");
+        assertThat(markdown).contains("**Impact:** Existing clients that read this response field");
+        assertThat(markdown).contains("**Suggestion:** Keep returning the field as deprecated");
     }
 }

@@ -4,6 +4,7 @@ import io.github.springapidiff.diff.Change;
 import io.github.springapidiff.diff.Severity;
 import io.github.springapidiff.diff.SnapshotDiffer;
 import io.github.springapidiff.model.ApiSnapshot;
+import io.github.springapidiff.report.ChangeAdvice;
 import io.github.springapidiff.report.MarkdownReportWriter;
 import io.github.springapidiff.scanner.ProjectScanner;
 import java.io.ByteArrayOutputStream;
@@ -167,6 +168,8 @@ public class CheckCommand implements Callable<Integer> {
                     .append(")");
             }
             summary.append("\n");
+            summary.append("  Impact: ").append(ChangeAdvice.impact(change)).append("\n");
+            summary.append("  Suggestion: ").append(ChangeAdvice.suggestion(change)).append("\n");
         }
         summary.append("\n");
     }

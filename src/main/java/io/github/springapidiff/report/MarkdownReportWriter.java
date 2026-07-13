@@ -10,7 +10,7 @@ import java.util.stream.Collectors;
 public class MarkdownReportWriter {
     public String write(List<Change> changes) {
         StringBuilder markdown = new StringBuilder();
-        markdown.append("# API Diff Report\n\n");
+        markdown.append("# API Compatibility Report\n\n");
         markdown.append("## Summary\n\n");
         markdown.append("- Breaking changes: ").append(count(changes, Severity.BREAKING)).append("\n");
         markdown.append("- Warnings: ").append(count(changes, Severity.WARNING)).append("\n");
@@ -42,7 +42,7 @@ public class MarkdownReportWriter {
         for (Map.Entry<String, List<Change>> entry : byEndpoint.entrySet()) {
             markdown.append("### ").append(entry.getKey()).append("\n\n");
             for (Change change : entry.getValue()) {
-                markdown.append("- ").append(change.message());
+                markdown.append("- **Change:** ").append(change.message());
                 if (change.oldValue() != null || change.newValue() != null) {
                     markdown.append(" (`")
                         .append(change.oldValue() == null ? "-" : change.oldValue())
@@ -51,6 +51,8 @@ public class MarkdownReportWriter {
                         .append("`)");
                 }
                 markdown.append("\n");
+                markdown.append("  - **Impact:** ").append(ChangeAdvice.impact(change)).append("\n");
+                markdown.append("  - **Suggestion:** ").append(ChangeAdvice.suggestion(change)).append("\n");
             }
             markdown.append("\n");
         }
