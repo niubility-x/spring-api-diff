@@ -20,12 +20,21 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.stream.Stream;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
-@Command(name = "check", description = "Check Spring REST API compatibility between Git states.")
+@Command(
+    name = "check",
+    description = "Check Spring REST API compatibility between Git states.",
+    footer = {
+        "Examples:",
+        "  spring-api-diff check --base origin/main --head HEAD",
+        "  spring-api-diff check --base origin/main --head HEAD --module user-service",
+        "  spring-api-diff check --fetch --fail-on-breaking"
+    })
 public class CheckCommand implements Callable<Integer> {
     @Option(names = "--repo", description = "Git repository path. Defaults to current directory.")
     private Path repo = Paths.get(".");
@@ -39,11 +48,17 @@ public class CheckCommand implements Callable<Integer> {
     @Option(names = "--worktree", description = "Compare the base ref with the current working tree, including uncommitted changes.")
     private boolean worktree;
 
+    @Option(names = "--module", description = "Module path relative to the Git repository root.")
+    private Path module;
+
     @Option(names = "--report", description = "Markdown report output file. Prints a summary to stdout either way.")
     private Path report;
 
     @Option(names = "--fail-on-breaking", description = "Return non-zero when breaking changes are found.")
     private boolean failOnBreaking;
+
+    @Option(names = "--fetch", description = "Fetch the CI target branch when it is missing locally.")
+    private boolean fetch;
 
     @Option(names = "--include", description = "Only include controllers whose package starts with this value.")
     private List<String> includes = new ArrayList<>();
@@ -73,7 +88,10 @@ public class CheckCommand implements Callable<Integer> {
         }
 
         Path repoRoot = resolveRepoRoot(repo.toAbsolutePath().normalize());
-        String baseRef = base == null ? detectBaseRef(repoRoot) : base;
+        BaseSelection baseSelection = base == null
+            ? new BaseRefDetector(fetch, environment()).detect(repoRoot)
+            : new BaseSelection(base, "explicit --base");
+        String baseRef = baseSelection.ref();
         boolean useWorktree = worktree || (head == null && hasWorktreeChanges(repoRoot));
         String headRef = useWorktree ? "worktree" : (head == null ? "HEAD" : head);
 
@@ -83,12 +101,15 @@ public class CheckCommand implements Callable<Integer> {
             baseCheckout = checkoutRef(repoRoot, baseRef, "base");
             headCheckout = useWorktree ? GitCheckout.current(repoRoot) : checkoutRef(repoRoot, headRef, "head");
 
+            ScanPathResolver scanPathResolver = new ScanPathResolver(module);
+            List<Path> baseScanPaths = scanPathResolver.resolve(baseCheckout.path());
+            List<Path> headScanPaths = scanPathResolver.resolve(headCheckout.path());
             ProjectScanner scanner = new ProjectScanner();
-            ApiSnapshot oldSnapshot = scanSnapshot(scanner, baseCheckout.path(), baseRef);
-            ApiSnapshot newSnapshot = scanSnapshot(scanner, headCheckout.path(), headRef);
+            ApiSnapshot oldSnapshot = scanSnapshot(scanner, scanPathResolver, baseScanPaths, baseRef);
+            ApiSnapshot newSnapshot = scanSnapshot(scanner, scanPathResolver, headScanPaths, headRef);
             List<Change> changes = new SnapshotDiffer().diff(oldSnapshot, newSnapshot);
 
-            System.out.print(writeConsoleSummary(changes, baseRef, headRef, oldSnapshot, newSnapshot));
+            System.out.print(writeConsoleSummary(changes, baseSelection, headRef, repoRoot, headCheckout.path(), headScanPaths, oldSnapshot, newSnapshot));
             writeReportIfRequested(changes);
 
             boolean hasBreaking = changes.stream().anyMatch(change -> change.severity() == Severity.BREAKING);
@@ -109,20 +130,8 @@ public class CheckCommand implements Callable<Integer> {
         }
     }
 
-    private String detectBaseRef(Path repoRoot) throws IOException, InterruptedException {
-        for (String candidate : Arrays.asList("origin/main", "main", "master")) {
-            if (git(repoRoot, false, "rev-parse", "--verify", candidate + "^{commit}").exitCode == 0) {
-                return candidate;
-            }
-        }
-        throw new UserFacingException(
-            "No base ref could be detected.\n\n"
-                + "Tried:\n"
-                + "- origin/main\n"
-                + "- main\n"
-                + "- master\n\n"
-                + "Pass a base ref explicitly, for example:\n"
-                + "spring-api-diff check --base origin/main");
+    protected Map<String, String> environment() {
+        return System.getenv();
     }
 
     private boolean hasWorktreeChanges(Path repoRoot) throws IOException, InterruptedException {
@@ -144,20 +153,31 @@ public class CheckCommand implements Callable<Integer> {
         return new GitCheckout(checkoutPath, tempRoot, true);
     }
 
-    private ApiSnapshot scanSnapshot(ProjectScanner scanner, Path path, String ref) throws IOException {
-        try {
-            return scanner.scan(path, includes, excludes);
-        } catch (IOException e) {
-            if (e.getMessage() != null && e.getMessage().contains("Java source root not found")) {
-                throw new UserFacingException(
-                    "Java source directory was not found for " + ref + ": " + path.resolve("src/main/java") + "\n\n"
-                        + "Please check:\n"
-                        + "1. Run from the Spring Boot project root, or pass --repo <path>.\n"
-                        + "2. For multi-module projects, run inside the module directory for now.\n"
-                        + "3. Make sure the selected Git ref contains src/main/java.");
+    private ApiSnapshot scanSnapshot(ProjectScanner scanner, ScanPathResolver scanPathResolver, List<Path> paths, String ref) throws IOException {
+        List<ApiSnapshot> snapshots = new ArrayList<>();
+        for (Path path : paths) {
+            try {
+                snapshots.add(scanner.scan(path, includes, excludes));
+            } catch (IOException e) {
+                if (e.getMessage() != null && e.getMessage().contains("Java source root not found")) {
+                    throw scanPathResolver.sourceRootNotFound(ref);
+                }
+                throw e;
             }
-            throw e;
         }
+        if (snapshots.size() == 1) {
+            return snapshots.get(0);
+        }
+        List<io.github.springapidiff.model.Endpoint> endpoints = new ArrayList<>();
+        for (ApiSnapshot snapshot : snapshots) {
+            endpoints.addAll(snapshot.endpoints());
+        }
+        Collections.sort(endpoints, Comparator.comparing(io.github.springapidiff.model.Endpoint::id));
+        return new ApiSnapshot(
+            "1",
+            snapshots.get(0).generatedAt(),
+            new io.github.springapidiff.model.ProjectInfo(paths.get(0).getParent().getFileName().toString(), "unknown", "unknown"),
+            endpoints);
     }
 
     private void writeReportIfRequested(List<Change> changes) throws IOException {
@@ -173,11 +193,22 @@ public class CheckCommand implements Callable<Integer> {
         System.out.println("Wrote report: " + report.toAbsolutePath());
     }
 
-    private String writeConsoleSummary(List<Change> changes, String baseRef, String headRef, ApiSnapshot oldSnapshot, ApiSnapshot newSnapshot) {
+    private String writeConsoleSummary(
+        List<Change> changes,
+        BaseSelection baseSelection,
+        String headRef,
+        Path repoRoot,
+        Path headCheckoutPath,
+        List<Path> scanPaths,
+        ApiSnapshot oldSnapshot,
+        ApiSnapshot newSnapshot) {
         StringBuilder summary = new StringBuilder();
         summary.append("API compatibility check\n\n");
-        summary.append("Base: ").append(baseRef).append("\n");
-        summary.append("Head: ").append(headRef).append("\n\n");
+        summary.append("Base: ").append(baseSelection.ref()).append("\n");
+        summary.append("Base source: ").append(baseSelection.source()).append("\n");
+        summary.append("Head: ").append(headRef).append("\n");
+        appendScanPaths(summary, repoRoot, headCheckoutPath, scanPaths);
+        summary.append("\n");
         summary.append("Changes: ").append(changes.size()).append("\n");
         summary.append("- BREAKING: ").append(count(changes, Severity.BREAKING)).append("\n");
         summary.append("- WARNING: ").append(count(changes, Severity.WARNING)).append("\n");
@@ -193,6 +224,20 @@ public class CheckCommand implements Callable<Integer> {
         appendConsoleSection(summary, "WARNING", changes, Severity.WARNING);
         appendConsoleSection(summary, "NON_BREAKING", changes, Severity.NON_BREAKING);
         return summary.toString();
+    }
+
+    private void appendScanPaths(StringBuilder summary, Path repoRoot, Path headCheckoutPath, List<Path> scanPaths) {
+        summary.append("Scan paths:\n");
+        for (Path scanPath : scanPaths) {
+            summary.append("- ").append(displayScanPath(repoRoot, headCheckoutPath, scanPath)).append("\n");
+        }
+    }
+
+    private String displayScanPath(Path repoRoot, Path headCheckoutPath, Path scanPath) {
+        Path sourceRoot = scanPath.resolve("src/main/java");
+        Path base = headCheckoutPath.equals(repoRoot) ? repoRoot : headCheckoutPath;
+        Path displayPath = base.relativize(sourceRoot).normalize();
+        return displayPath.toString().isEmpty() ? "." : displayPath.toString().replace('\\', '/');
     }
 
     private void appendEmptyScanWarning(StringBuilder summary, ApiSnapshot oldSnapshot, ApiSnapshot newSnapshot) {
@@ -212,7 +257,7 @@ public class CheckCommand implements Callable<Integer> {
         summary.append("- Controllers are not under src/main/java.\n");
         summary.append("- Controllers do not use supported Spring MVC annotations.\n");
         summary.append("- --include / --exclude filtered all controllers.\n");
-        summary.append("- This is a multi-module project; run from the target module directory for now.\n\n");
+        summary.append("- This is a multi-module project; pass --module <module-path>.\n\n");
     }
 
     private long count(List<Change> changes, Severity severity) {
@@ -291,12 +336,6 @@ public class CheckCommand implements Callable<Integer> {
             checkout.close(repoRoot);
         } catch (IOException | InterruptedException ignored) {
             // Cleanup failures should not hide the actual check result.
-        }
-    }
-
-    private static class UserFacingException extends IOException {
-        private UserFacingException(String message) {
-            super(message);
         }
     }
 

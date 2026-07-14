@@ -36,10 +36,11 @@ java -jar /path/to/spring-api-diff-0.1.0-SNAPSHOT.jar check
 
 默认行为：
 
-1. 自动选择基准分支：优先 `origin/main`，其次 `main`，最后 `master`。
+1. 自动选择基准版本：优先使用 CI 目标分支环境变量，其次使用当前分支 upstream 的 merge-base，再使用 `origin/HEAD`，最后尝试 `origin/main`、`origin/master`、`origin/develop`、`main`、`master`、`develop`。
 2. 如果当前工作区有未提交改动，则比较基准分支和当前工作区。
 3. 如果工作区干净，则比较基准分支和 `HEAD`。
-4. 输出 API 兼容性摘要和变更列表。
+4. 自动扫描当前项目的 `src/main/java`；如果仓库根目录是多模块父工程，则自动发现子模块中的 `src/main/java`。
+5. 输出 API 兼容性摘要和变更列表。
 
 示例输出：
 
@@ -47,7 +48,10 @@ java -jar /path/to/spring-api-diff-0.1.0-SNAPSHOT.jar check
 API compatibility check
 
 Base: origin/main
+Base source: origin/HEAD
 Head: worktree
+Scan paths:
+- src/main/java
 
 Changes: 3
 - BREAKING: 1
@@ -72,14 +76,49 @@ java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check --base main --worktree
 java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check --base main --head HEAD
 ```
 
-### 在 CI 中作为门禁
+### 多模块项目限定扫描模块
+
+默认情况下，在多模块仓库根目录直接运行 `check` 会自动发现子模块中的 `src/main/java` 并扫描。通常不需要额外参数。
+
+如果只想检查某一个模块，可以使用 `--module` 指定模块路径：
 
 ```bash
 java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check \
   --base origin/main \
   --head HEAD \
-  --fail-on-breaking
+  --module user-service
 ```
+
+`--module` 是相对于 Git 仓库根目录的路径，也支持更深层目录：
+
+```bash
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check \
+  --base origin/main \
+  --head HEAD \
+  --module services/user-service
+```
+
+Git 比较仍然基于整个仓库的 `base` 和 `head`，但 API 扫描会定位到：
+
+- base checkout 下的 `user-service/src/main/java`
+- head checkout 下的 `user-service/src/main/java`
+
+### 在 CI 中作为门禁
+
+在 GitHub Actions、GitLab CI 或 Jenkins PR 构建中，工具会优先读取 CI 目标分支环境变量来自动选择基准分支。推荐写法：
+
+```bash
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check --fetch --fail-on-breaking
+```
+
+`--fetch` 会在 CI 目标分支本地缺失时自动拉取对应远程分支，然后继续检查。
+
+工具会自动识别这些环境变量：
+
+- `GITHUB_BASE_REF`
+- `CI_MERGE_REQUEST_TARGET_BRANCH_NAME`
+- `CI_DEFAULT_BRANCH`
+- `CHANGE_TARGET`
 
 如果存在 BREAKING 变更，命令会返回非零退出码。
 
@@ -98,8 +137,10 @@ java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check \
 - `--base`：基准 Git ref，例如 `origin/main`、`main`、某个 commit 或 tag。
 - `--head`：新版本 Git ref，例如 `HEAD` 或某个分支。
 - `--worktree`：用当前工作区作为新版本，包含未提交改动。
+- `--module`：指定要扫描的模块路径，相对于 Git 仓库根目录，例如 `user-service` 或 `services/user-service`。
 - `--report`：输出 Markdown 报告文件。
 - `--fail-on-breaking`：存在 BREAKING 变更时返回非零退出码。
+- `--fetch`：CI 目标分支本地缺失时自动执行 `git fetch origin <branch>:refs/remotes/origin/<branch>` 后继续检查。
 - `--include`：只扫描指定包名前缀下的 Controller。
 - `--exclude`：排除指定包名前缀下的 Controller。
 
@@ -152,6 +193,54 @@ java -jar spring-api-diff-0.1.0-SNAPSHOT.jar diff \
   --new new.json \
   --report report.md \
   --fail-on-breaking
+```
+
+## 常见问题
+
+### 提示没有找到 src/main/java
+
+如果没有自动发现到源码目录，请确认项目中是否存在 `src/main/java`。如果只想扫描某个模块，可以指定模块路径：
+
+```bash
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check --module <module-path>
+```
+
+例如：
+
+```bash
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check --module user-service
+```
+
+### 提示模块目录不存在
+
+请确认：
+
+1. `--module` 是相对于 Git 仓库根目录的路径，不是相对于当前 shell 目录。
+2. `base` 和 `head` 两个版本都包含该模块。
+3. 如果比较远程分支，先执行 `git fetch`，确保本地存在对应 Git ref。
+
+### 提示检测到 CI 目标分支但找不到本地 Git ref
+
+CI 环境变量里有目标分支，但 checkout/fetch 没有把目标分支拉到本地。推荐在命令中加 `--fetch`：
+
+```bash
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check --fetch --fail-on-breaking
+```
+
+也可以手动拉取目标分支：
+
+```bash
+git fetch origin main:refs/remotes/origin/main
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check --fail-on-breaking
+```
+
+### 提示 Git ref not found
+
+指定的分支、tag 或 commit 在本地不存在。常见处理方式：
+
+```bash
+git fetch origin
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check --base origin/main --head HEAD
 ```
 
 ## 测试

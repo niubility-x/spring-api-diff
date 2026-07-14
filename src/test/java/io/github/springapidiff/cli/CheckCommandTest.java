@@ -13,7 +13,9 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -53,7 +55,92 @@ class CheckCommandTest {
         CommandResult result = runCheck("--repo", repo.toString(), "--fail-on-breaking");
 
         assertThat(result.exitCode).isEqualTo(1);
-        assertThat(result.output).contains("Base: main", "Head: worktree", "Response field 'email' was removed.");
+        assertThat(result.output).contains("Base: main", "Base source: fallback branch main", "Head: worktree", "Scan paths:", "- src/main/java", "Response field 'email' was removed.");
+    }
+
+    @Test
+    void automaticallyChecksDiscoveredModulesFromGitRoot() throws Exception {
+        Path repo = tempDir.resolve("auto-module-repo");
+        Files.createDirectories(repo);
+        git(repo, "init", "-b", "main");
+        git(repo, "config", "user.name", "test");
+        git(repo, "config", "user.email", "test@example.com");
+        copyFixtureToPath("demo-v1", repo.resolve("services/user-service"));
+        git(repo, "add", ".");
+        git(repo, "commit", "-m", "initial api");
+        copyFixtureToPath("demo-v2", repo.resolve("services/user-service"));
+        git(repo, "add", ".");
+        git(repo, "commit", "-m", "change api");
+
+        CommandResult result = runCheck(
+            "--repo", repo.toString(),
+            "--base", "main~1",
+            "--head", "HEAD",
+            "--fail-on-breaking");
+
+        assertThat(result.exitCode).isEqualTo(1);
+        assertThat(result.output).contains("BREAKING", "services/user-service/src/main/java", "Response field 'email' was removed.");
+    }
+
+    @Test
+    void checksSpecifiedModuleRelativeToGitRoot() throws Exception {
+        Path repo = tempDir.resolve("multi-module-repo");
+        Files.createDirectories(repo);
+        git(repo, "init", "-b", "main");
+        git(repo, "config", "user.name", "test");
+        git(repo, "config", "user.email", "test@example.com");
+        copyFixtureToPath("demo-v1", repo.resolve("user-service"));
+        git(repo, "add", ".");
+        git(repo, "commit", "-m", "initial api");
+        copyFixtureToPath("demo-v2", repo.resolve("user-service"));
+        git(repo, "add", ".");
+        git(repo, "commit", "-m", "change api");
+
+        CommandResult result = runCheck(
+            "--repo", repo.toString(),
+            "--base", "main~1",
+            "--head", "HEAD",
+            "--module", "user-service",
+            "--fail-on-breaking");
+
+        assertThat(result.exitCode).isEqualTo(1);
+        assertThat(result.output).contains("Base source: explicit --base", "user-service/src/main/java", "Response field 'email' was removed.");
+    }
+
+    @Test
+    void printsFriendlyMessageWhenModuleIsMissing() throws Exception {
+        Path repo = initRepoWithFixture("demo-v1");
+
+        CommandResult result = runCheck(
+            "--repo", repo.toString(),
+            "--base", "main",
+            "--head", "HEAD",
+            "--module", "user-service");
+
+        assertThat(result.exitCode).isEqualTo(2);
+        assertThat(result.errorOutput).contains(
+            "模块目录不存在：user-service",
+            "--module 是相对于 Git 仓库根目录的路径",
+            "base 和 head 两个版本都包含该模块");
+    }
+
+    @Test
+    void suggestsModuleOptionWhenSourceRootIsMissing() throws Exception {
+        Path repo = tempDir.resolve("root-without-source");
+        Files.createDirectories(repo);
+        git(repo, "init", "-b", "main");
+        git(repo, "config", "user.name", "test");
+        git(repo, "config", "user.email", "test@example.com");
+        Files.write(repo.resolve("pom.xml"), "<project></project>".getBytes(StandardCharsets.UTF_8));
+        git(repo, "add", ".");
+        git(repo, "commit", "-m", "initial");
+
+        CommandResult result = runCheck("--repo", repo.toString(), "--base", "main", "--head", "HEAD");
+
+        assertThat(result.exitCode).isEqualTo(2);
+        assertThat(result.errorOutput).contains(
+            "没有找到 src/main/java，也没有自动发现包含 src/main/java 的子模块。",
+            "spring-api-diff check --module <module-path>");
     }
 
     @Test
@@ -65,6 +152,104 @@ class CheckCommandTest {
 
         assertThat(result.exitCode).isEqualTo(2);
         assertThat(result.errorOutput).contains("not a Git repository", "--repo <path>");
+    }
+
+    @Test
+    void fetchesMissingCiTargetBranchWhenRequested() throws Exception {
+        Path seed = tempDir.resolve("fetch-seed");
+        Files.createDirectories(seed);
+        git(seed, "init", "-b", "main");
+        git(seed, "config", "user.name", "test");
+        git(seed, "config", "user.email", "test@example.com");
+        copyFixture("demo-v1", seed);
+        git(seed, "add", ".");
+        git(seed, "commit", "-m", "initial api");
+        Path remote = tempDir.resolve("remote.git");
+        git(seed, "init", "--bare", remote.toString());
+        git(seed, "remote", "add", "origin", remote.toString());
+        git(seed, "push", "origin", "main");
+        git(seed, "checkout", "-b", "feature/api-change");
+        copyFixture("demo-v2", seed);
+        git(seed, "add", ".");
+        git(seed, "commit", "-m", "change api");
+        git(seed, "push", "origin", "feature/api-change");
+
+        Path repo = tempDir.resolve("ci-fetch-repo");
+        runGit(tempDir, "clone", "--branch", "feature/api-change", "--single-branch", remote.toString(), repo.toString());
+        git(repo, "config", "user.name", "test");
+        git(repo, "config", "user.email", "test@example.com");
+        Map<String, String> env = new HashMap<>();
+        env.put("GITHUB_BASE_REF", "main");
+
+        CommandResult result = runCheck(env, "--repo", repo.toString(), "--fetch", "--fail-on-breaking");
+
+        assertThat(result.exitCode).isEqualTo(1);
+        assertThat(result.output).contains(
+            "Base: origin/main",
+            "Base source: CI target branch GITHUB_BASE_REF=main after git fetch",
+            "Response field 'email' was removed.");
+    }
+
+    @Test
+    void detectsCiTargetBranchAsDefaultBase() throws Exception {
+        Path repo = tempDir.resolve("ci-repo");
+        Files.createDirectories(repo);
+        git(repo, "init", "-b", "develop");
+        git(repo, "config", "user.name", "test");
+        git(repo, "config", "user.email", "test@example.com");
+        copyFixture("demo-v1", repo);
+        git(repo, "add", ".");
+        git(repo, "commit", "-m", "initial api");
+        git(repo, "checkout", "-b", "feature/api-change");
+        copyFixture("demo-v2", repo);
+        Map<String, String> env = new HashMap<>();
+        env.put("GITHUB_BASE_REF", "develop");
+
+        CommandResult result = runCheck(env, "--repo", repo.toString(), "--fail-on-breaking");
+
+        assertThat(result.exitCode).isEqualTo(1);
+        assertThat(result.output).contains("Base: develop", "Base source: CI target branch GITHUB_BASE_REF=develop", "Head: worktree", "Response field 'email' was removed.");
+    }
+
+    @Test
+    void printsFriendlyMessageWhenCiTargetBranchWasNotFetched() throws Exception {
+        Path repo = tempDir.resolve("ci-missing-base-repo");
+        Files.createDirectories(repo);
+        git(repo, "init", "-b", "feature/api-change");
+        git(repo, "config", "user.name", "test");
+        git(repo, "config", "user.email", "test@example.com");
+        copyFixture("demo-v1", repo);
+        git(repo, "add", ".");
+        git(repo, "commit", "-m", "initial api");
+        Map<String, String> env = new HashMap<>();
+        env.put("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", "develop");
+
+        CommandResult result = runCheck(env, "--repo", repo.toString());
+
+        assertThat(result.exitCode).isEqualTo(2);
+        assertThat(result.errorOutput).contains(
+            "Detected CI target branch develop",
+            "origin/develop",
+            "git fetch origin develop:refs/remotes/origin/develop");
+    }
+
+    @Test
+    void detectsDevelopAsDefaultBaseWhenMainIsMissing() throws Exception {
+        Path repo = tempDir.resolve("develop-repo");
+        Files.createDirectories(repo);
+        git(repo, "init", "-b", "develop");
+        git(repo, "config", "user.name", "test");
+        git(repo, "config", "user.email", "test@example.com");
+        copyFixture("demo-v1", repo);
+        git(repo, "add", ".");
+        git(repo, "commit", "-m", "initial api");
+        git(repo, "checkout", "-b", "feature/api-change");
+        copyFixture("demo-v2", repo);
+
+        CommandResult result = runCheck("--repo", repo.toString(), "--fail-on-breaking");
+
+        assertThat(result.exitCode).isEqualTo(1);
+        assertThat(result.output).contains("Base: develop", "Base source: fallback branch develop", "Head: worktree", "Response field 'email' was removed.");
     }
 
     @Test
@@ -82,7 +267,7 @@ class CheckCommandTest {
         CommandResult result = runCheck("--repo", repo.toString());
 
         assertThat(result.exitCode).isEqualTo(2);
-        assertThat(result.errorOutput).contains("No base ref could be detected", "origin/main", "--base origin/main");
+        assertThat(result.errorOutput).contains("No base ref could be detected", "origin/HEAD", "develop", "--base origin/main");
     }
 
     @Test
@@ -115,11 +300,15 @@ class CheckCommandTest {
     }
 
     private void copyFixture(String fixture, Path repo) throws IOException {
-        deleteDirectory(repo.resolve("src"));
+        copyFixtureToPath(fixture, repo);
+    }
+
+    private void copyFixtureToPath(String fixture, Path targetRoot) throws IOException {
+        deleteDirectory(targetRoot.resolve("src"));
         Path source = Paths.get("src/test/resources/fixtures", fixture);
         try (Stream<Path> paths = Files.walk(source)) {
             for (Path sourcePath : collect(paths)) {
-                Path targetPath = repo.resolve(source.relativize(sourcePath).toString());
+                Path targetPath = targetRoot.resolve(source.relativize(sourcePath).toString());
                 if (Files.isDirectory(sourcePath)) {
                     Files.createDirectories(targetPath);
                 } else {
@@ -131,6 +320,14 @@ class CheckCommandTest {
     }
 
     private CommandResult runCheck(String... args) throws Exception {
+        return runCheck(new CheckCommand(), args);
+    }
+
+    private CommandResult runCheck(Map<String, String> env, String... args) throws Exception {
+        return runCheck(new TestCheckCommand(env), args);
+    }
+
+    private CommandResult runCheck(CheckCommand command, String... args) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         ByteArrayOutputStream errorOutput = new ByteArrayOutputStream();
         PrintStream originalOut = System.out;
@@ -138,7 +335,7 @@ class CheckCommandTest {
         System.setOut(new PrintStream(output, true, StandardCharsets.UTF_8.name()));
         System.setErr(new PrintStream(errorOutput, true, StandardCharsets.UTF_8.name()));
         try {
-            int exitCode = new CommandLine(new CheckCommand()).execute(args);
+            int exitCode = new CommandLine(command).execute(args);
             return new CommandResult(
                 exitCode,
                 new String(output.toByteArray(), StandardCharsets.UTF_8),
@@ -150,11 +347,15 @@ class CheckCommandTest {
     }
 
     private String git(Path repo, String... args) throws Exception {
+        return runGit(repo, args);
+    }
+
+    private String runGit(Path directory, String... args) throws Exception {
         List<String> command = new ArrayList<>();
         command.add("git");
         command.addAll(Arrays.asList(args));
         ProcessBuilder processBuilder = new ProcessBuilder(command);
-        processBuilder.directory(repo.toFile());
+        processBuilder.directory(directory.toFile());
         processBuilder.redirectErrorStream(true);
         Process process = processBuilder.start();
         ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -188,6 +389,19 @@ class CheckCommandTest {
         List<Path> values = new ArrayList<>();
         paths.forEach(values::add);
         return values;
+    }
+
+    private static class TestCheckCommand extends CheckCommand {
+        private final Map<String, String> env;
+
+        private TestCheckCommand(Map<String, String> env) {
+            this.env = env;
+        }
+
+        @Override
+        protected Map<String, String> environment() {
+            return env;
+        }
     }
 
     private static class CommandResult {
