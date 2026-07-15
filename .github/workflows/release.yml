@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+          cache: maven
+
+      - name: Verify release version
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$VERSION" != "$TAG_VERSION" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match pom.xml version $VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "jar=target/spring-api-diff-$VERSION.jar" >> "$GITHUB_OUTPUT"
+          echo "checksum=target/spring-api-diff-$VERSION.jar.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Build and test
+        run: mvn --batch-mode clean package
+
+      - name: Verify executable jar
+        shell: bash
+        run: |
+          OUTPUT="$(java -jar '${{ steps.version.outputs.jar }}' --version)"
+          test "$OUTPUT" = "spring-api-diff ${{ steps.version.outputs.version }}"
+
+      - name: Generate SHA-256 checksum
+        shell: bash
+        run: |
+          cd target
+          sha256sum "spring-api-diff-${{ steps.version.outputs.version }}.jar" \
+            > "spring-api-diff-${{ steps.version.outputs.version }}.jar.sha256"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JAR: ${{ steps.version.outputs.jar }}
+          CHECKSUM: ${{ steps.version.outputs.checksum }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$JAR#$GITHUB_REF_NAME executable jar" \
+            "$CHECKSUM#SHA-256 checksum" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
