@@ -5,9 +5,30 @@
 
   <groupId>io.github.springapidiff</groupId>
   <artifactId>spring-api-diff</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.1.0</version>
   <name>spring-api-diff</name>
   <description>Detect breaking REST API changes in Spring Boot projects.</description>
+  <url>https://github.com/niubility-x/spring-api-diff</url>
+
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <name>niubility</name>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/niubility-x/spring-api-diff.git</connection>
+    <developerConnection>scm:git:https://github.com/niubility-x/spring-api-diff.git</developerConnection>
+    <url>https://github.com/niubility-x/spring-api-diff</url>
+  </scm>
 
   <properties>
     <maven.compiler.source>1.8</maven.compiler.source>

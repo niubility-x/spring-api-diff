@@ -5,6 +5,7 @@ import io.github.springapidiff.diff.Severity;
 import io.github.springapidiff.diff.SnapshotDiffer;
 import io.github.springapidiff.model.ApiSnapshot;
 import io.github.springapidiff.report.ChangeAdvice;
+import io.github.springapidiff.report.JsonReportWriter;
 import io.github.springapidiff.report.MarkdownReportWriter;
 import io.github.springapidiff.scanner.ProjectScanner;
 import java.io.ByteArrayOutputStream;
@@ -75,7 +76,7 @@ public class CheckCommand implements Callable<Integer> {
     @Option(names = "--ignore-endpoint", description = "Ignore changes for endpoints matching this glob, for example 'POST /internal/**'.")
     private List<String> ignoreEndpoints = new ArrayList<>();
 
-    @Option(names = "--format", defaultValue = "markdown", description = "Report format. Supported: markdown.")
+    @Option(names = "--format", defaultValue = "markdown", description = "Report format. Supported: markdown, json.")
     private String format;
 
     @Override
@@ -89,8 +90,9 @@ public class CheckCommand implements Callable<Integer> {
     }
 
     private Integer run() throws Exception {
-        if (!"markdown".equals(format.toLowerCase(Locale.ROOT))) {
-            throw new UserFacingException("Unsupported report format: " + format + "\nSupported format: markdown");
+        String normalizedFormat = format.toLowerCase(Locale.ROOT);
+        if (!"markdown".equals(normalizedFormat) && !"json".equals(normalizedFormat)) {
+            throw new UserFacingException("Unsupported report format: " + format + "\nSupported formats: markdown, json");
         }
 
         Path repoRoot = resolveRepoRoot(repo.toAbsolutePath().normalize());
@@ -135,7 +137,7 @@ public class CheckCommand implements Callable<Integer> {
                 .filter(new SnapshotDiffer().diff(oldSnapshot, newSnapshot));
 
             System.out.print(writeConsoleSummary(changes, baseSelection, headRef, repoRoot, headCheckout.path(), headScanPaths, oldSnapshot, newSnapshot));
-            writeReportIfRequested(changes, effectiveReport);
+            writeReportIfRequested(changes, effectiveReport, normalizedFormat);
 
             boolean hasBreaking = changes.stream().anyMatch(change -> change.severity() == Severity.BREAKING);
             return effectiveFailOnBreaking && hasBreaking ? 1 : 0;
@@ -239,7 +241,7 @@ public class CheckCommand implements Callable<Integer> {
             endpoints);
     }
 
-    private void writeReportIfRequested(List<Change> changes, Path effectiveReport) throws IOException {
+    private void writeReportIfRequested(List<Change> changes, Path effectiveReport, String normalizedFormat) throws IOException {
         if (effectiveReport == null) {
             return;
         }
@@ -247,9 +249,16 @@ public class CheckCommand implements Callable<Integer> {
         if (parent != null) {
             Files.createDirectories(parent);
         }
-        String markdown = new MarkdownReportWriter().write(changes);
-        Files.write(effectiveReport, markdown.getBytes(StandardCharsets.UTF_8));
+        String output = writeReport(changes, normalizedFormat);
+        Files.write(effectiveReport, output.getBytes(StandardCharsets.UTF_8));
         System.out.println("Wrote report: " + effectiveReport.toAbsolutePath());
+    }
+
+    private String writeReport(List<Change> changes, String normalizedFormat) throws IOException {
+        if ("json".equals(normalizedFormat)) {
+            return new JsonReportWriter().write(changes);
+        }
+        return new MarkdownReportWriter().write(changes);
     }
 
     private String writeConsoleSummary(

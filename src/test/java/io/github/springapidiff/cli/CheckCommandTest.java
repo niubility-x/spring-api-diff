@@ -353,6 +353,27 @@ class CheckCommandTest {
         assertThat(result.output).contains("Warning: No Spring Controller endpoints were found", "Possible causes");
     }
 
+    @Test
+    void writesJsonReportWhenRequested() throws Exception {
+        Path repo = initRepoWithFixture("demo-v1");
+        copyFixture("demo-v2", repo);
+        git(repo, "add", ".");
+        git(repo, "commit", "-m", "change api");
+        Path report = tempDir.resolve("api-diff.json");
+
+        CommandResult result = runCheck(
+            "--repo", repo.toString(),
+            "--base", "main~1",
+            "--head", "HEAD",
+            "--report", report.toString(),
+            "--format", "json");
+
+        assertThat(result.exitCode).isEqualTo(0);
+        assertThat(Files.readAllBytes(report))
+            .asString(StandardCharsets.UTF_8)
+            .contains("\"summary\"", "\"severity\" : \"BREAKING\"", "\"endpoint\" : \"GET /api/users/{id}\"");
+    }
+
     private Path initRepoWithFixture(String fixture) throws Exception {
         Path repo = tempDir.resolve("repo-" + fixture);
         Files.createDirectories(repo);

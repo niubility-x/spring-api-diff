@@ -5,6 +5,7 @@ import io.github.springapidiff.diff.Severity;
 import io.github.springapidiff.diff.SnapshotDiffer;
 import io.github.springapidiff.io.SnapshotReader;
 import io.github.springapidiff.model.ApiSnapshot;
+import io.github.springapidiff.report.JsonReportWriter;
 import io.github.springapidiff.report.MarkdownReportWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -29,30 +30,38 @@ public class DiffCommand implements Callable<Integer> {
     @Option(names = "--fail-on-breaking", description = "Return non-zero when breaking changes are found.")
     private boolean failOnBreaking;
 
-    @Option(names = "--format", defaultValue = "markdown", description = "Report format. Supported: markdown.")
+    @Option(names = "--format", defaultValue = "markdown", description = "Report format. Supported: markdown, json.")
     private String format;
 
     @Override
     public Integer call() throws Exception {
-        if (!"markdown".equals(format.toLowerCase(Locale.ROOT))) {
-            throw new IllegalArgumentException("Unsupported report format: " + format);
+        String normalizedFormat = format.toLowerCase(Locale.ROOT);
+        if (!"markdown".equals(normalizedFormat) && !"json".equals(normalizedFormat)) {
+            throw new IllegalArgumentException("Unsupported report format: " + format + ". Supported: markdown, json");
         }
         SnapshotReader reader = new SnapshotReader();
         ApiSnapshot oldSnapshot = reader.read(oldSnapshotPath);
         ApiSnapshot newSnapshot = reader.read(newSnapshotPath);
         List<Change> changes = new SnapshotDiffer().diff(oldSnapshot, newSnapshot);
-        String markdown = new MarkdownReportWriter().write(changes);
+        String output = writeReport(changes, normalizedFormat);
         if (report == null) {
-            System.out.print(markdown);
+            System.out.print(output);
         } else {
             Path parent = report.toAbsolutePath().getParent();
             if (parent != null) {
                 Files.createDirectories(parent);
             }
-            Files.write(report, markdown.getBytes(StandardCharsets.UTF_8));
+            Files.write(report, output.getBytes(StandardCharsets.UTF_8));
             System.out.println("Wrote report: " + report.toAbsolutePath());
         }
         boolean hasBreaking = changes.stream().anyMatch(change -> change.severity() == Severity.BREAKING);
         return failOnBreaking && hasBreaking ? 1 : 0;
+    }
+
+    private String writeReport(List<Change> changes, String normalizedFormat) throws Exception {
+        if ("json".equals(normalizedFormat)) {
+            return new JsonReportWriter().write(changes);
+        }
+        return new MarkdownReportWriter().write(changes);
     }
 }
