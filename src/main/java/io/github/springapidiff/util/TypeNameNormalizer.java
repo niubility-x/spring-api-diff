@@ -17,6 +17,12 @@ public final class TypeNameNormalizer {
         "Iterable",
         "Page",
         "Slice",
+        "Result",
+        "ApiResult",
+        "ApiResponse",
+        "Response",
+        "BaseResponse",
+        "R",
         "Flux",
         "Mono"));
 

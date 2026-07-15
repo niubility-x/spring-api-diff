@@ -48,6 +48,72 @@ class CheckCommandTest {
     }
 
     @Test
+    void ignoresEndpointChangesFromConfigFile() throws Exception {
+        Path repo = initRepoWithFixture("demo-v1");
+        copyFixture("demo-v2", repo);
+        Files.write(repo.resolve("spring-api-diff.yml"), Arrays.asList(
+            "base: main",
+            "worktree: true",
+            "failOnBreaking: true",
+            "ignore:",
+            "  endpoints:",
+            "    - \"* /api/users**\""
+        ), StandardCharsets.UTF_8);
+
+        CommandResult result = runCheck("--repo", repo.toString());
+
+        assertThat(result.exitCode).isEqualTo(0);
+        assertThat(result.output).contains("Changes: 0", "No API changes detected.");
+        assertThat(result.output).doesNotContain("Response field 'email' was removed.");
+    }
+
+    @Test
+    void readsCheckOptionsFromConfigFile() throws Exception {
+        Path repo = tempDir.resolve("config-repo");
+        Files.createDirectories(repo);
+        git(repo, "init", "-b", "main");
+        git(repo, "config", "user.name", "test");
+        git(repo, "config", "user.email", "test@example.com");
+        copyFixtureToPath("demo-v1", repo.resolve("services/user-service"));
+        copyFixtureToPath("demo-v1", repo.resolve("tools/pdf-service"));
+        git(repo, "add", ".");
+        git(repo, "commit", "-m", "initial api");
+        copyFixtureToPath("demo-v2", repo.resolve("services/user-service"));
+        Files.write(repo.resolve("spring-api-diff.yml"), Arrays.asList(
+            "base: main~1",
+            "head: HEAD",
+            "failOnBreaking: true",
+            "modules:",
+            "  include:",
+            "    - services/*"
+        ), StandardCharsets.UTF_8);
+        git(repo, "add", ".");
+        git(repo, "commit", "-m", "change api");
+
+        CommandResult result = runCheck("--repo", repo.toString());
+
+        assertThat(result.exitCode).isEqualTo(1);
+        assertThat(result.output).contains("Base: main~1", "Base source: config base", "services/user-service/src/main/java");
+        assertThat(result.output).doesNotContain("tools/pdf-service/src/main/java");
+    }
+
+    @Test
+    void commandLineOptionsOverrideConfigFile() throws Exception {
+        Path repo = initRepoWithFixture("demo-v1");
+        copyFixture("demo-v2", repo);
+        Files.write(repo.resolve("spring-api-diff.yml"), Arrays.asList(
+            "base: main",
+            "worktree: true",
+            "failOnBreaking: false"
+        ), StandardCharsets.UTF_8);
+
+        CommandResult result = runCheck("--repo", repo.toString(), "--base", "main", "--worktree", "--fail-on-breaking");
+
+        assertThat(result.exitCode).isEqualTo(1);
+        assertThat(result.output).contains("Base source: explicit --base", "Head: worktree");
+    }
+
+    @Test
     void defaultsToMainAndChecksDirtyWorktree() throws Exception {
         Path repo = initRepoWithFixture("demo-v1");
         copyFixture("demo-v2", repo);

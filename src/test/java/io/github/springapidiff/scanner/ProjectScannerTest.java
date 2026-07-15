@@ -46,6 +46,7 @@ class ProjectScannerTest {
             "DELETE /api/advanced/{id}",
             "GET /api/advanced/search",
             "POST /api/advanced/search",
+            "GET /api/advanced/paged",
             "GET /internal/advanced/{id}",
             "POST /internal/advanced/search");
 
@@ -54,6 +55,11 @@ class ProjectScannerTest {
             .containsExactly(tuple("status", "String", false));
         assertThat(get.response().type()).isEqualTo("ResponseEntity<AdvancedResponse>");
         assertThat(get.response().fields()).extracting("name", "type")
+            .containsExactly(tuple("traceId", "String"), tuple("id", "Long"), tuple("display_name", "String"));
+
+        Endpoint paged = endpoint(endpoints, "GET /api/advanced/paged");
+        assertThat(paged.response().type()).isEqualTo("Result<Page<AdvancedResponse>>");
+        assertThat(paged.response().fields()).extracting("name", "type")
             .containsExactly(tuple("traceId", "String"), tuple("id", "Long"), tuple("display_name", "String"));
 
         Endpoint post = endpoint(endpoints, "POST /api/advanced");

@@ -45,4 +45,9 @@ public class AdvancedController {
     public List<AdvancedResponse> search() {
         return null;
     }
+
+    @GetMapping("/paged")
+    public Result<Page<AdvancedResponse>> paged() {
+        return null;
+    }
 }

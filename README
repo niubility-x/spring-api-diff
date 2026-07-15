@@ -98,6 +98,20 @@ java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check \
   --module services/user-service
 ```
 
+如果希望保留自动发现，但排除非 API 模块，可以使用模块 glob 过滤：
+
+```bash
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check \
+  --exclude-module sdip-module-excel2pdf
+```
+
+也可以只包含匹配的模块：
+
+```bash
+java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check \
+  --include-module "sdip-module-report-*"
+```
+
 Git 比较仍然基于整个仓库的 `base` 和 `head`，但 API 扫描会定位到：
 
 - base checkout 下的 `user-service/src/main/java`
@@ -138,11 +152,56 @@ java -jar spring-api-diff-0.1.0-SNAPSHOT.jar check \
 - `--head`：新版本 Git ref，例如 `HEAD` 或某个分支。
 - `--worktree`：用当前工作区作为新版本，包含未提交改动。
 - `--module`：指定要扫描的模块路径，相对于 Git 仓库根目录，例如 `user-service` 或 `services/user-service`。
+- `--include-module`：只保留自动发现且路径匹配 glob 的模块，例如 `sdip-module-report-*`。
+- `--exclude-module`：排除自动发现且路径匹配 glob 的模块，例如 `sdip-module-excel2pdf`。
 - `--report`：输出 Markdown 报告文件。
 - `--fail-on-breaking`：存在 BREAKING 变更时返回非零退出码。
 - `--fetch`：CI 目标分支本地缺失时自动执行 `git fetch origin <branch>:refs/remotes/origin/<branch>` 后继续检查。
 - `--include`：只扫描指定包名前缀下的 Controller。
 - `--exclude`：排除指定包名前缀下的 Controller。
+- `--ignore-endpoint`：忽略匹配 `METHOD PATH` glob 的 endpoint 变更，例如 `POST /internal/**`。
+
+## 配置文件
+
+可以在 Git 仓库根目录创建 `spring-api-diff.yml`，把常用参数固化下来：
+
+```yaml
+fetch: true
+failOnBreaking: true
+
+modules:
+  include:
+    - "sdip-module-report-*"
+  exclude:
+    - "sdip-module-excel2pdf"
+
+include:
+  - "com.sdip"
+exclude:
+  - "com.sdip.internal"
+
+ignore:
+  endpoints:
+    - "POST /internal/**"
+    - "GET /actuator/**"
+```
+
+支持的字段：
+
+- `base`：等同于 `--base`
+- `head`：等同于 `--head`
+- `worktree`：等同于 `--worktree`
+- `module`：等同于 `--module`
+- `report`：等同于 `--report`
+- `fetch`：等同于 `--fetch`
+- `failOnBreaking`：等同于 `--fail-on-breaking`
+- `modules.include`：等同于 `--include-module`
+- `modules.exclude`：等同于 `--exclude-module`
+- `include`：等同于 `--include`
+- `exclude`：等同于 `--exclude`
+- `ignore.endpoints`：等同于 `--ignore-endpoint`
+
+命令行参数优先级高于配置文件。
 
 ## 变更等级
 

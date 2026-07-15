@@ -46,25 +46,34 @@ public class CheckCommand implements Callable<Integer> {
     private String head;
 
     @Option(names = "--worktree", description = "Compare the base ref with the current working tree, including uncommitted changes.")
-    private boolean worktree;
+    private Boolean worktree;
 
     @Option(names = "--module", description = "Module path relative to the Git repository root.")
     private Path module;
+
+    @Option(names = "--include-module", description = "Only include auto-discovered modules whose path matches this glob.")
+    private List<String> includeModules = new ArrayList<>();
+
+    @Option(names = "--exclude-module", description = "Exclude auto-discovered modules whose path matches this glob.")
+    private List<String> excludeModules = new ArrayList<>();
 
     @Option(names = "--report", description = "Markdown report output file. Prints a summary to stdout either way.")
     private Path report;
 
     @Option(names = "--fail-on-breaking", description = "Return non-zero when breaking changes are found.")
-    private boolean failOnBreaking;
+    private Boolean failOnBreaking;
 
     @Option(names = "--fetch", description = "Fetch the CI target branch when it is missing locally.")
-    private boolean fetch;
+    private Boolean fetch;
 
     @Option(names = "--include", description = "Only include controllers whose package starts with this value.")
     private List<String> includes = new ArrayList<>();
 
     @Option(names = "--exclude", description = "Exclude controllers whose package starts with this value.")
     private List<String> excludes = new ArrayList<>();
+
+    @Option(names = "--ignore-endpoint", description = "Ignore changes for endpoints matching this glob, for example 'POST /internal/**'.")
+    private List<String> ignoreEndpoints = new ArrayList<>();
 
     @Option(names = "--format", defaultValue = "markdown", description = "Report format. Supported: markdown.")
     private String format;
@@ -83,17 +92,32 @@ public class CheckCommand implements Callable<Integer> {
         if (!"markdown".equals(format.toLowerCase(Locale.ROOT))) {
             throw new UserFacingException("Unsupported report format: " + format + "\nSupported format: markdown");
         }
-        if (worktree && head != null) {
+
+        Path repoRoot = resolveRepoRoot(repo.toAbsolutePath().normalize());
+        CheckConfig config = new CheckConfigLoader().load(repoRoot);
+        String effectiveBase = firstNonBlank(base, config.base());
+        String effectiveHead = firstNonBlank(head, config.head());
+        Boolean effectiveWorktree = firstNonNull(worktree, config.worktree(), Boolean.FALSE);
+        Path effectiveModule = firstNonBlankPath(module, config.module());
+        List<String> effectiveIncludeModules = firstNonEmpty(includeModules, config.modules().include());
+        List<String> effectiveExcludeModules = firstNonEmpty(excludeModules, config.modules().exclude());
+        Path effectiveReport = firstNonBlankPath(report, config.report());
+        boolean effectiveFailOnBreaking = firstNonNull(failOnBreaking, config.failOnBreaking(), Boolean.FALSE);
+        boolean effectiveFetch = firstNonNull(fetch, config.fetch(), Boolean.FALSE);
+        List<String> effectiveIncludes = firstNonEmpty(includes, config.include());
+        List<String> effectiveExcludes = firstNonEmpty(excludes, config.exclude());
+        List<String> effectiveIgnoreEndpoints = firstNonEmpty(ignoreEndpoints, config.ignore().endpoints());
+
+        if (effectiveWorktree && effectiveHead != null) {
             throw new UserFacingException("Use either --worktree or --head, not both.\nExample: spring-api-diff check --base main --worktree");
         }
 
-        Path repoRoot = resolveRepoRoot(repo.toAbsolutePath().normalize());
-        BaseSelection baseSelection = base == null
-            ? new BaseRefDetector(fetch, environment()).detect(repoRoot)
-            : new BaseSelection(base, "explicit --base");
+        BaseSelection baseSelection = effectiveBase == null
+            ? new BaseRefDetector(effectiveFetch, environment()).detect(repoRoot)
+            : new BaseSelection(effectiveBase, base == null ? "config base" : "explicit --base");
         String baseRef = baseSelection.ref();
-        boolean useWorktree = worktree || (head == null && hasWorktreeChanges(repoRoot));
-        String headRef = useWorktree ? "worktree" : (head == null ? "HEAD" : head);
+        boolean useWorktree = effectiveWorktree || (effectiveHead == null && hasWorktreeChanges(repoRoot));
+        String headRef = useWorktree ? "worktree" : (effectiveHead == null ? "HEAD" : effectiveHead);
 
         GitCheckout baseCheckout = null;
         GitCheckout headCheckout = null;
@@ -101,19 +125,20 @@ public class CheckCommand implements Callable<Integer> {
             baseCheckout = checkoutRef(repoRoot, baseRef, "base");
             headCheckout = useWorktree ? GitCheckout.current(repoRoot) : checkoutRef(repoRoot, headRef, "head");
 
-            ScanPathResolver scanPathResolver = new ScanPathResolver(module);
+            ScanPathResolver scanPathResolver = new ScanPathResolver(effectiveModule, effectiveIncludeModules, effectiveExcludeModules);
             List<Path> baseScanPaths = scanPathResolver.resolve(baseCheckout.path());
             List<Path> headScanPaths = scanPathResolver.resolve(headCheckout.path());
             ProjectScanner scanner = new ProjectScanner();
-            ApiSnapshot oldSnapshot = scanSnapshot(scanner, scanPathResolver, baseScanPaths, baseRef);
-            ApiSnapshot newSnapshot = scanSnapshot(scanner, scanPathResolver, headScanPaths, headRef);
-            List<Change> changes = new SnapshotDiffer().diff(oldSnapshot, newSnapshot);
+            ApiSnapshot oldSnapshot = scanSnapshot(scanner, scanPathResolver, baseScanPaths, baseRef, effectiveIncludes, effectiveExcludes);
+            ApiSnapshot newSnapshot = scanSnapshot(scanner, scanPathResolver, headScanPaths, headRef, effectiveIncludes, effectiveExcludes);
+            List<Change> changes = new ChangeFilter(effectiveIgnoreEndpoints)
+                .filter(new SnapshotDiffer().diff(oldSnapshot, newSnapshot));
 
             System.out.print(writeConsoleSummary(changes, baseSelection, headRef, repoRoot, headCheckout.path(), headScanPaths, oldSnapshot, newSnapshot));
-            writeReportIfRequested(changes);
+            writeReportIfRequested(changes, effectiveReport);
 
             boolean hasBreaking = changes.stream().anyMatch(change -> change.severity() == Severity.BREAKING);
-            return failOnBreaking && hasBreaking ? 1 : 0;
+            return effectiveFailOnBreaking && hasBreaking ? 1 : 0;
         } finally {
             closeQuietly(headCheckout, repoRoot);
             closeQuietly(baseCheckout, repoRoot);
@@ -132,6 +157,34 @@ public class CheckCommand implements Callable<Integer> {
 
     protected Map<String, String> environment() {
         return System.getenv();
+    }
+
+    private String firstNonBlank(String first, String second) {
+        if (first != null && !first.trim().isEmpty()) {
+            return first;
+        }
+        return second == null || second.trim().isEmpty() ? null : second;
+    }
+
+    private Path firstNonBlankPath(Path first, String second) {
+        if (first != null) {
+            return first;
+        }
+        return second == null || second.trim().isEmpty() ? null : Paths.get(second);
+    }
+
+    private <T> T firstNonNull(T first, T second, T defaultValue) {
+        if (first != null) {
+            return first;
+        }
+        return second == null ? defaultValue : second;
+    }
+
+    private List<String> firstNonEmpty(List<String> first, List<String> second) {
+        if (first != null && !first.isEmpty()) {
+            return first;
+        }
+        return second == null ? new ArrayList<>() : second;
     }
 
     private boolean hasWorktreeChanges(Path repoRoot) throws IOException, InterruptedException {
@@ -153,11 +206,17 @@ public class CheckCommand implements Callable<Integer> {
         return new GitCheckout(checkoutPath, tempRoot, true);
     }
 
-    private ApiSnapshot scanSnapshot(ProjectScanner scanner, ScanPathResolver scanPathResolver, List<Path> paths, String ref) throws IOException {
+    private ApiSnapshot scanSnapshot(
+        ProjectScanner scanner,
+        ScanPathResolver scanPathResolver,
+        List<Path> paths,
+        String ref,
+        List<String> effectiveIncludes,
+        List<String> effectiveExcludes) throws IOException {
         List<ApiSnapshot> snapshots = new ArrayList<>();
         for (Path path : paths) {
             try {
-                snapshots.add(scanner.scan(path, includes, excludes));
+                snapshots.add(scanner.scan(path, effectiveIncludes, effectiveExcludes));
             } catch (IOException e) {
                 if (e.getMessage() != null && e.getMessage().contains("Java source root not found")) {
                     throw scanPathResolver.sourceRootNotFound(ref);
@@ -180,17 +239,17 @@ public class CheckCommand implements Callable<Integer> {
             endpoints);
     }
 
-    private void writeReportIfRequested(List<Change> changes) throws IOException {
-        if (report == null) {
+    private void writeReportIfRequested(List<Change> changes, Path effectiveReport) throws IOException {
+        if (effectiveReport == null) {
             return;
         }
-        Path parent = report.toAbsolutePath().getParent();
+        Path parent = effectiveReport.toAbsolutePath().getParent();
         if (parent != null) {
             Files.createDirectories(parent);
         }
         String markdown = new MarkdownReportWriter().write(changes);
-        Files.write(report, markdown.getBytes(StandardCharsets.UTF_8));
-        System.out.println("Wrote report: " + report.toAbsolutePath());
+        Files.write(effectiveReport, markdown.getBytes(StandardCharsets.UTF_8));
+        System.out.println("Wrote report: " + effectiveReport.toAbsolutePath());
     }
 
     private String writeConsoleSummary(

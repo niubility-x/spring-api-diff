@@ -1,8 +1,10 @@
 package io.github.springapidiff.cli;
 
 import java.io.IOException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.PathMatcher;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -10,9 +12,13 @@ import java.util.stream.Stream;
 
 class ScanPathResolver {
     private final Path module;
+    private final List<String> includeModules;
+    private final List<String> excludeModules;
 
-    ScanPathResolver(Path module) {
+    ScanPathResolver(Path module, List<String> includeModules, List<String> excludeModules) {
         this.module = module;
+        this.includeModules = includeModules == null ? Collections.emptyList() : includeModules;
+        this.excludeModules = excludeModules == null ? Collections.emptyList() : excludeModules;
     }
 
     List<Path> resolve(Path checkoutPath) throws IOException {
@@ -30,7 +36,7 @@ class ScanPathResolver {
         if (Files.isDirectory(checkoutPath.resolve("src/main/java"))) {
             return Collections.singletonList(checkoutPath);
         }
-        List<Path> modulePaths = discoverModulePaths(checkoutPath);
+        List<Path> modulePaths = filterModulePaths(checkoutPath, discoverModulePaths(checkoutPath));
         if (!modulePaths.isEmpty()) {
             return modulePaths;
         }
@@ -49,6 +55,33 @@ class ScanPathResolver {
             "没有找到 src/main/java，也没有自动发现包含 src/main/java 的子模块。\n"
                 + "如果只想扫描某个模块，请使用：\n"
                 + "spring-api-diff check --module <module-path>");
+    }
+
+    private List<Path> filterModulePaths(Path checkoutPath, List<Path> modulePaths) {
+        List<Path> filtered = new ArrayList<>();
+        for (Path modulePath : modulePaths) {
+            String relativePath = checkoutPath.relativize(modulePath).normalize().toString().replace('\\', '/');
+            if (included(relativePath)) {
+                filtered.add(modulePath);
+            }
+        }
+        return filtered;
+    }
+
+    private boolean included(String relativePath) {
+        boolean includeMatch = includeModules.isEmpty() || matchesAny(relativePath, includeModules);
+        boolean excludeMatch = matchesAny(relativePath, excludeModules);
+        return includeMatch && !excludeMatch;
+    }
+
+    private boolean matchesAny(String relativePath, List<String> patterns) {
+        for (String pattern : patterns) {
+            PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
+            if (matcher.matches(FileSystems.getDefault().getPath(relativePath))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private List<Path> discoverModulePaths(Path checkoutPath) throws IOException {
