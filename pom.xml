@@ -5,7 +5,7 @@
 
   <groupId>io.github.springapidiff</groupId>
   <artifactId>spring-api-diff</artifactId>
-  <version>0.1.0</version>
+  <version>0.1.1</version>
   <name>spring-api-diff</name>
   <description>Detect breaking REST API changes in Spring Boot projects.</description>
   <url>https://github.com/niubility-x/spring-api-diff</url>

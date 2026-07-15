@@ -9,7 +9,7 @@ import picocli.CommandLine.Command;
 @Command(
     name = "spring-api-diff",
     mixinStandardHelpOptions = true,
-    version = "spring-api-diff 0.1.0",
+    version = "spring-api-diff 0.1.1",
     description = "Detect breaking REST API changes in Spring Boot projects.",
     subcommands = {SnapshotCommand.class, DiffCommand.class, CheckCommand.class})
 public class Main implements Runnable {
