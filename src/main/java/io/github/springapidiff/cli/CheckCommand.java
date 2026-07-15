@@ -79,6 +79,9 @@ public class CheckCommand implements Callable<Integer> {
     @Option(names = "--format", defaultValue = "markdown", description = "Report format. Supported: markdown, json.")
     private String format;
 
+    @Option(names = "--quiet", description = "Suppress progress output.")
+    private Boolean quiet;
+
     @Override
     public Integer call() throws Exception {
         try {
@@ -109,11 +112,13 @@ public class CheckCommand implements Callable<Integer> {
         List<String> effectiveIncludes = firstNonEmpty(includes, config.include());
         List<String> effectiveExcludes = firstNonEmpty(excludes, config.exclude());
         List<String> effectiveIgnoreEndpoints = firstNonEmpty(ignoreEndpoints, config.ignore().endpoints());
+        boolean effectiveQuiet = firstNonNull(quiet, config.quiet(), Boolean.FALSE);
 
         if (effectiveWorktree && effectiveHead != null) {
             throw new UserFacingException("Use either --worktree or --head, not both.\nExample: spring-api-diff check --base main --worktree");
         }
 
+        progress(effectiveQuiet, 1, 7, "Selecting Git refs...");
         BaseSelection baseSelection = effectiveBase == null
             ? new BaseRefDetector(effectiveFetch, environment()).detect(repoRoot)
             : new BaseSelection(effectiveBase, base == null ? "config base" : "explicit --base");
@@ -124,15 +129,25 @@ public class CheckCommand implements Callable<Integer> {
         GitCheckout baseCheckout = null;
         GitCheckout headCheckout = null;
         try {
+            progress(effectiveQuiet, 2, 7, "Preparing base source...");
             baseCheckout = checkoutRef(repoRoot, baseRef, "base");
+
+            progress(effectiveQuiet, 3, 7, "Preparing head source...");
             headCheckout = useWorktree ? GitCheckout.current(repoRoot) : checkoutRef(repoRoot, headRef, "head");
 
+            progress(effectiveQuiet, 4, 7, "Resolving scan paths...");
             ScanPathResolver scanPathResolver = new ScanPathResolver(effectiveModule, effectiveIncludeModules, effectiveExcludeModules);
             List<Path> baseScanPaths = scanPathResolver.resolve(baseCheckout.path());
             List<Path> headScanPaths = scanPathResolver.resolve(headCheckout.path());
             ProjectScanner scanner = new ProjectScanner();
+
+            progress(effectiveQuiet, 5, 7, "Scanning base APIs...");
             ApiSnapshot oldSnapshot = scanSnapshot(scanner, scanPathResolver, baseScanPaths, baseRef, effectiveIncludes, effectiveExcludes);
+
+            progress(effectiveQuiet, 6, 7, "Scanning head APIs...");
             ApiSnapshot newSnapshot = scanSnapshot(scanner, scanPathResolver, headScanPaths, headRef, effectiveIncludes, effectiveExcludes);
+
+            progress(effectiveQuiet, 7, 7, "Comparing snapshots...");
             List<Change> changes = new ChangeFilter(effectiveIgnoreEndpoints)
                 .filter(new SnapshotDiffer().diff(oldSnapshot, newSnapshot));
 
@@ -144,6 +159,12 @@ public class CheckCommand implements Callable<Integer> {
         } finally {
             closeQuietly(headCheckout, repoRoot);
             closeQuietly(baseCheckout, repoRoot);
+        }
+    }
+
+    private void progress(boolean quiet, int step, int total, String message) {
+        if (!quiet) {
+            System.err.println("[" + step + "/" + total + "] " + message);
         }
     }
 

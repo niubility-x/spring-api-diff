@@ -354,6 +354,50 @@ class CheckCommandTest {
     }
 
     @Test
+    void printsProgressToErrorOutput() throws Exception {
+        Path repo = initRepoWithFixture("demo-v1");
+        copyFixture("demo-v2", repo);
+
+        CommandResult result = runCheck("--repo", repo.toString(), "--base", "main", "--worktree");
+
+        assertThat(result.exitCode).isEqualTo(0);
+        assertThat(result.errorOutput).contains(
+            "[1/7] Selecting Git refs...",
+            "[5/7] Scanning base APIs...",
+            "[7/7] Comparing snapshots...");
+        assertThat(result.output).startsWith("API compatibility check");
+    }
+
+    @Test
+    void suppressesProgressWhenQuietIsRequested() throws Exception {
+        Path repo = initRepoWithFixture("demo-v1");
+        copyFixture("demo-v2", repo);
+
+        CommandResult result = runCheck("--repo", repo.toString(), "--base", "main", "--worktree", "--quiet");
+
+        assertThat(result.exitCode).isEqualTo(0);
+        assertThat(result.errorOutput).isEmpty();
+        assertThat(result.output).contains("API compatibility check", "Head: worktree");
+    }
+
+    @Test
+    void suppressesProgressFromConfigFile() throws Exception {
+        Path repo = initRepoWithFixture("demo-v1");
+        copyFixture("demo-v2", repo);
+        Files.write(repo.resolve("spring-api-diff.yml"), Arrays.asList(
+            "base: main",
+            "worktree: true",
+            "quiet: true"
+        ), StandardCharsets.UTF_8);
+
+        CommandResult result = runCheck("--repo", repo.toString());
+
+        assertThat(result.exitCode).isEqualTo(0);
+        assertThat(result.errorOutput).isEmpty();
+        assertThat(result.output).contains("API compatibility check", "Head: worktree");
+    }
+
+    @Test
     void writesJsonReportWhenRequested() throws Exception {
         Path repo = initRepoWithFixture("demo-v1");
         copyFixture("demo-v2", repo);

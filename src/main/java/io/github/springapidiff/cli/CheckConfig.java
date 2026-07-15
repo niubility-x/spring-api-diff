@@ -12,6 +12,7 @@ class CheckConfig {
     private String report;
     private Boolean failOnBreaking;
     private Boolean fetch;
+    private Boolean quiet;
     private Ignore ignore = new Ignore();
     private List<String> include = new ArrayList<>();
     private List<String> exclude = new ArrayList<>();
@@ -78,6 +79,14 @@ class CheckConfig {
 
     public void setFetch(Boolean fetch) {
         this.fetch = fetch;
+    }
+
+    Boolean quiet() {
+        return quiet;
+    }
+
+    public void setQuiet(Boolean quiet) {
+        this.quiet = quiet;
     }
 
     Ignore ignore() {
