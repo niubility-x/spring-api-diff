@@ -1,24 +1,25 @@
 package io.github.springapidiff.cli;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 class BaseRefDetector {
     private final boolean fetch;
     private final Map<String, String> environment;
+    private final GitClient gitClient;
 
     BaseRefDetector(boolean fetch, Map<String, String> environment) {
+        this(fetch, environment, new GitClient());
+    }
+
+    BaseRefDetector(boolean fetch, Map<String, String> environment, GitClient gitClient) {
         this.fetch = fetch;
         this.environment = environment;
+        this.gitClient = gitClient;
     }
 
     BaseSelection detect(Path repoRoot) throws IOException, InterruptedException {
@@ -38,7 +39,7 @@ class BaseRefDetector {
         }
 
         for (String candidate : Arrays.asList("origin/main", "origin/master", "origin/develop", "main", "master", "develop")) {
-            if (git(repoRoot, false, "rev-parse", "--verify", candidate + "^{commit}").exitCode == 0) {
+            if (gitClient.execute(repoRoot, false, "rev-parse", "--verify", candidate + "^{commit}").exitCode() == 0) {
                 return new BaseSelection(candidate, "fallback branch " + candidate);
             }
         }
@@ -64,14 +65,14 @@ class BaseRefDetector {
             return null;
         }
         for (String candidate : branchRefCandidates(targetBranch.name())) {
-            if (git(repoRoot, false, "rev-parse", "--verify", candidate + "^{commit}").exitCode == 0) {
+            if (gitClient.execute(repoRoot, false, "rev-parse", "--verify", candidate + "^{commit}").exitCode() == 0) {
                 return new BaseSelection(candidate, "CI target branch " + targetBranch.envKey() + "=" + targetBranch.name());
             }
         }
         if (fetch) {
-            git(repoRoot, false, "fetch", "origin", targetBranch.name() + ":refs/remotes/origin/" + targetBranch.name());
+            gitClient.execute(repoRoot, false, "fetch", "origin", targetBranch.name() + ":refs/remotes/origin/" + targetBranch.name());
             for (String candidate : branchRefCandidates(targetBranch.name())) {
-                if (git(repoRoot, false, "rev-parse", "--verify", candidate + "^{commit}").exitCode == 0) {
+                if (gitClient.execute(repoRoot, false, "rev-parse", "--verify", candidate + "^{commit}").exitCode() == 0) {
                     return new BaseSelection(candidate, "CI target branch " + targetBranch.envKey() + "=" + targetBranch.name() + " after git fetch");
                 }
             }
@@ -126,51 +127,25 @@ class BaseRefDetector {
     }
 
     private BaseSelection detectUpstreamMergeBase(Path repoRoot) throws IOException, InterruptedException {
-        if (git(repoRoot, false, "rev-parse", "--verify", "@{upstream}").exitCode != 0) {
+        if (gitClient.execute(repoRoot, false, "rev-parse", "--verify", "@{upstream}").exitCode() != 0) {
             return null;
         }
-        CommandResult result = git(repoRoot, false, "merge-base", "HEAD", "@{upstream}");
-        if (result.exitCode != 0 || result.output.trim().isEmpty()) {
+        GitClient.CommandResult result = gitClient.execute(repoRoot, false, "merge-base", "HEAD", "@{upstream}");
+        if (result.exitCode() != 0 || result.output().trim().isEmpty()) {
             return null;
         }
-        return new BaseSelection(result.output.trim(), "current branch upstream merge-base");
+        return new BaseSelection(result.output().trim(), "current branch upstream merge-base");
     }
 
     private BaseSelection detectOriginHead(Path repoRoot) throws IOException, InterruptedException {
-        CommandResult result = git(repoRoot, false, "symbolic-ref", "--short", "refs/remotes/origin/HEAD");
-        if (result.exitCode != 0 || result.output.trim().isEmpty()) {
+        GitClient.CommandResult result = gitClient.execute(repoRoot, false, "symbolic-ref", "--short", "refs/remotes/origin/HEAD");
+        if (result.exitCode() != 0 || result.output().trim().isEmpty()) {
             return null;
         }
-        String originHead = result.output.trim();
-        return git(repoRoot, false, "rev-parse", "--verify", originHead + "^{commit}").exitCode == 0
+        String originHead = result.output().trim();
+        return gitClient.execute(repoRoot, false, "rev-parse", "--verify", originHead + "^{commit}").exitCode() == 0
             ? new BaseSelection(originHead, "origin/HEAD")
             : null;
-    }
-
-    private CommandResult git(Path repoRoot, boolean failOnError, String... args) throws IOException, InterruptedException {
-        List<String> command = new ArrayList<>();
-        command.add("git");
-        command.addAll(Arrays.asList(args));
-        ProcessBuilder processBuilder = new ProcessBuilder(command);
-        processBuilder.directory(repoRoot.toFile());
-        processBuilder.redirectErrorStream(true);
-        Process process = processBuilder.start();
-        String output = read(process.getInputStream());
-        int exitCode = process.waitFor();
-        if (failOnError && exitCode != 0) {
-            throw new IOException("Git command failed: " + command + "\n" + output);
-        }
-        return new CommandResult(exitCode, output);
-    }
-
-    private String read(InputStream inputStream) throws IOException {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
-        int read;
-        while ((read = inputStream.read(buffer)) != -1) {
-            output.write(buffer, 0, read);
-        }
-        return new String(output.toByteArray(), StandardCharsets.UTF_8);
     }
 
     private static class CiTargetBranch {
@@ -188,16 +163,6 @@ class BaseRefDetector {
 
         private String name() {
             return name;
-        }
-    }
-
-    private static class CommandResult {
-        private final int exitCode;
-        private final String output;
-
-        private CommandResult(int exitCode, String output) {
-            this.exitCode = exitCode;
-            this.output = output;
         }
     }
 }

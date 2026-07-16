@@ -8,22 +8,18 @@ import io.github.springapidiff.report.ChangeAdvice;
 import io.github.springapidiff.report.JsonReportWriter;
 import io.github.springapidiff.report.MarkdownReportWriter;
 import io.github.springapidiff.scanner.ProjectScanner;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Callable;
-import java.util.stream.Stream;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
@@ -37,6 +33,8 @@ import picocli.CommandLine.Option;
         "  spring-api-diff check --fetch --fail-on-breaking"
     })
 public class CheckCommand implements Callable<Integer> {
+    private final GitClient gitClient = new GitClient();
+
     @Option(names = "--repo", description = "Git repository path. Defaults to current directory.")
     private Path repo = Paths.get(".");
 
@@ -120,7 +118,7 @@ public class CheckCommand implements Callable<Integer> {
 
         progress(effectiveQuiet, 1, 7, "Selecting Git refs...");
         BaseSelection baseSelection = effectiveBase == null
-            ? new BaseRefDetector(effectiveFetch, environment()).detect(repoRoot)
+            ? new BaseRefDetector(effectiveFetch, environment(), gitClient).detect(repoRoot)
             : new BaseSelection(effectiveBase, base == null ? "config base" : "explicit --base");
         String baseRef = baseSelection.ref();
         boolean useWorktree = effectiveWorktree || (effectiveHead == null && hasWorktreeChanges(repoRoot));
@@ -157,8 +155,8 @@ public class CheckCommand implements Callable<Integer> {
             boolean hasBreaking = changes.stream().anyMatch(change -> change.severity() == Severity.BREAKING);
             return effectiveFailOnBreaking && hasBreaking ? 1 : 0;
         } finally {
-            closeQuietly(headCheckout, repoRoot);
-            closeQuietly(baseCheckout, repoRoot);
+            closeQuietly(headCheckout);
+            closeQuietly(baseCheckout);
         }
     }
 
@@ -170,7 +168,7 @@ public class CheckCommand implements Callable<Integer> {
 
     private Path resolveRepoRoot(Path repoPath) throws IOException, InterruptedException {
         try {
-            return gitPathOutput(repoPath, "rev-parse", "--show-toplevel");
+            return gitClient.pathOutput(repoPath, "rev-parse", "--show-toplevel");
         } catch (IOException e) {
             throw new UserFacingException(
                 "The path is not a Git repository: " + repoPath + "\n"
@@ -211,22 +209,19 @@ public class CheckCommand implements Callable<Integer> {
     }
 
     private boolean hasWorktreeChanges(Path repoRoot) throws IOException, InterruptedException {
-        return !gitOutputString(repoRoot, "status", "--porcelain").trim().isEmpty();
+        return !gitClient.output(repoRoot, "status", "--porcelain").trim().isEmpty();
     }
 
     private GitCheckout checkoutRef(Path repoRoot, String ref, String label) throws IOException, InterruptedException {
         String commit;
         try {
-            commit = gitOutputString(repoRoot, "rev-parse", "--verify", ref + "^{commit}").trim();
+            commit = gitClient.output(repoRoot, "rev-parse", "--verify", ref + "^{commit}").trim();
         } catch (IOException e) {
             throw new UserFacingException(
                 "Git ref not found: " + ref + "\n"
                     + "Check the branch, tag, or commit exists locally. If it is a remote branch, run git fetch first.");
         }
-        Path tempRoot = Files.createTempDirectory("spring-api-diff-");
-        Path checkoutPath = tempRoot.resolve(label);
-        gitOutputString(repoRoot, "worktree", "add", "--detach", checkoutPath.toString(), commit);
-        return new GitCheckout(checkoutPath, tempRoot, true);
+        return GitCheckout.temporary(gitClient, repoRoot, commit, label);
     }
 
     private ApiSnapshot scanSnapshot(
@@ -381,106 +376,15 @@ public class CheckCommand implements Callable<Integer> {
         summary.append("\n");
     }
 
-    private Path gitPathOutput(Path repoRoot, String... args) throws IOException, InterruptedException {
-        String output = gitOutputString(repoRoot, args).trim();
-        return Paths.get(output).toAbsolutePath().normalize();
-    }
-
-    private String gitOutputString(Path repoRoot, String... args) throws IOException, InterruptedException {
-        CommandResult result = git(repoRoot, true, args);
-        return result.output;
-    }
-
-    private CommandResult git(Path repoRoot, boolean failOnError, String... args) throws IOException, InterruptedException {
-        List<String> command = new ArrayList<>();
-        command.add("git");
-        command.addAll(Arrays.asList(args));
-        ProcessBuilder processBuilder = new ProcessBuilder(command);
-        processBuilder.directory(repoRoot.toFile());
-        processBuilder.redirectErrorStream(true);
-        Process process = processBuilder.start();
-        String output = read(process.getInputStream());
-        int exitCode = process.waitFor();
-        if (failOnError && exitCode != 0) {
-            throw new IOException("Git command failed: " + command + "\n" + output);
-        }
-        return new CommandResult(exitCode, output);
-    }
-
-    private String read(InputStream inputStream) throws IOException {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
-        int read;
-        while ((read = inputStream.read(buffer)) != -1) {
-            output.write(buffer, 0, read);
-        }
-        return new String(output.toByteArray(), StandardCharsets.UTF_8);
-    }
-
-    private void closeQuietly(GitCheckout checkout, Path repoRoot) {
+    private void closeQuietly(GitCheckout checkout) {
         if (checkout == null) {
             return;
         }
         try {
-            checkout.close(repoRoot);
+            checkout.close();
         } catch (IOException | InterruptedException ignored) {
             // Cleanup failures should not hide the actual check result.
         }
     }
 
-    private static class CommandResult {
-        private final int exitCode;
-        private final String output;
-
-        private CommandResult(int exitCode, String output) {
-            this.exitCode = exitCode;
-            this.output = output;
-        }
-    }
-
-    private static class GitCheckout {
-        private final Path path;
-        private final Path tempRoot;
-        private final boolean temporaryWorktree;
-
-        private GitCheckout(Path path, Path tempRoot, boolean temporaryWorktree) {
-            this.path = path;
-            this.tempRoot = tempRoot;
-            this.temporaryWorktree = temporaryWorktree;
-        }
-
-        private static GitCheckout current(Path path) {
-            return new GitCheckout(path, null, false);
-        }
-
-        private Path path() {
-            return path;
-        }
-
-        private void close(Path repoRoot) throws IOException, InterruptedException {
-            if (!temporaryWorktree) {
-                return;
-            }
-            ProcessBuilder processBuilder = new ProcessBuilder("git", "worktree", "remove", "--force", path.toString());
-            processBuilder.directory(repoRoot.toFile());
-            processBuilder.redirectErrorStream(true);
-            Process process = processBuilder.start();
-            process.waitFor();
-            deleteDirectory(tempRoot);
-        }
-
-        private void deleteDirectory(Path directory) throws IOException {
-            if (directory == null || !Files.exists(directory)) {
-                return;
-            }
-            try (Stream<Path> paths = Files.walk(directory)) {
-                List<Path> sorted = new ArrayList<>();
-                paths.forEach(sorted::add);
-                Collections.sort(sorted, Comparator.reverseOrder());
-                for (Path path : sorted) {
-                    Files.deleteIfExists(path);
-                }
-            }
-        }
-    }
 }
