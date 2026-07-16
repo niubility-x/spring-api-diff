@@ -22,6 +22,7 @@ public final class ChangeAdvice {
             case PATH_VARIABLE_TYPE_CHANGED:
                 return "Clients may send values in the old format and fail request binding or validation.";
             case REQUIRED_QUERY_PARAM_ADDED:
+            case QUERY_PARAM_BECAME_REQUIRED:
                 return "Existing clients that do not send this query parameter may start receiving 4xx responses.";
             case QUERY_PARAM_REMOVED:
                 return "Clients still sending this parameter may get ignored behavior or validation errors, depending on server handling.";
@@ -30,6 +31,7 @@ public final class ChangeAdvice {
             case REQUEST_BODY_FIELD_REMOVED:
                 return "Clients still sending this field may lose behavior if the server previously used it.";
             case REQUIRED_REQUEST_BODY_FIELD_ADDED:
+            case REQUEST_BODY_FIELD_BECAME_REQUIRED:
                 return "Existing clients that do not send this request field may start receiving validation errors.";
             case REQUEST_BODY_FIELD_TYPE_CHANGED:
                 return "Clients may send the old JSON value shape and fail deserialization or validation.";
@@ -59,6 +61,7 @@ public final class ChangeAdvice {
             case PATH_VARIABLE_TYPE_CHANGED:
                 return "Prefer accepting both old and new formats during migration, then remove the old format later.";
             case REQUIRED_QUERY_PARAM_ADDED:
+            case QUERY_PARAM_BECAME_REQUIRED:
                 return "Make the parameter optional with a safe default, or introduce a new endpoint version.";
             case QUERY_PARAM_REMOVED:
                 return "Keep accepting the parameter as deprecated until callers stop sending it.";
@@ -67,6 +70,7 @@ public final class ChangeAdvice {
             case REQUEST_BODY_FIELD_REMOVED:
                 return "Keep accepting the field as deprecated, or confirm no clients still depend on it.";
             case REQUIRED_REQUEST_BODY_FIELD_ADDED:
+            case REQUEST_BODY_FIELD_BECAME_REQUIRED:
                 return "Make the field optional first, provide a default on the server, or introduce a new endpoint version.";
             case REQUEST_BODY_FIELD_TYPE_CHANGED:
                 return "Support both JSON shapes during migration, or add a new field name for the new shape.";

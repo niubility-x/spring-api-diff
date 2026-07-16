@@ -98,15 +98,27 @@ public class SnapshotDiffer {
                         null,
                         rules.removedMessage(oldParameter.name())));
                 }
-            } else if (!oldParameter.type().equals(newParameter.type())) {
-                changes.add(change(
-                    Severity.BREAKING,
-                    rules.typeChangedType,
-                    endpoint,
-                    pathPrefix + "." + oldParameter.name(),
-                    oldParameter.type(),
-                    newParameter.type(),
-                    rules.typeChangedMessage(oldParameter.name(), oldParameter.type(), newParameter.type())));
+            } else {
+                if (!oldParameter.type().equals(newParameter.type())) {
+                    changes.add(change(
+                        Severity.BREAKING,
+                        rules.typeChangedType,
+                        endpoint,
+                        pathPrefix + "." + oldParameter.name(),
+                        oldParameter.type(),
+                        newParameter.type(),
+                        rules.typeChangedMessage(oldParameter.name(), oldParameter.type(), newParameter.type())));
+                }
+                if (rules == ParameterRules.QUERY_PARAM && !oldParameter.required() && newParameter.required()) {
+                    changes.add(change(
+                        Severity.BREAKING,
+                        ChangeType.QUERY_PARAM_BECAME_REQUIRED,
+                        endpoint,
+                        pathPrefix + "." + oldParameter.name(),
+                        "optional",
+                        "required",
+                        "Query parameter '" + oldParameter.name() + "' became required."));
+                }
             }
         }
 
@@ -155,15 +167,27 @@ public class SnapshotDiffer {
                     oldField.type(),
                     null,
                     rules.removedMessage(oldField.name())));
-            } else if (!oldField.type().equals(newField.type())) {
-                changes.add(change(
-                    Severity.BREAKING,
-                    rules.typeChangedType,
-                    endpoint,
-                    pathPrefix + "." + oldField.name(),
-                    oldField.type(),
-                    newField.type(),
-                    rules.typeChangedMessage(oldField.name(), oldField.type(), newField.type())));
+            } else {
+                if (!oldField.type().equals(newField.type())) {
+                    changes.add(change(
+                        Severity.BREAKING,
+                        rules.typeChangedType,
+                        endpoint,
+                        pathPrefix + "." + oldField.name(),
+                        oldField.type(),
+                        newField.type(),
+                        rules.typeChangedMessage(oldField.name(), oldField.type(), newField.type())));
+                }
+                if (rules == FieldRules.REQUEST_BODY && !oldField.required() && newField.required()) {
+                    changes.add(change(
+                        Severity.BREAKING,
+                        ChangeType.REQUEST_BODY_FIELD_BECAME_REQUIRED,
+                        endpoint,
+                        pathPrefix + "." + oldField.name(),
+                        "optional",
+                        "required",
+                        "Request body field '" + oldField.name() + "' became required."));
+                }
             }
         }
 

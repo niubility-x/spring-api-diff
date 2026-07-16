@@ -143,7 +143,7 @@ public class SpringAnnotationParser {
     private List<MappingInfo> requestMappings(AnnotationExpr annotation) {
         List<String> methods = httpMethods(annotation);
         if (methods.isEmpty()) {
-            methods = Collections.singletonList("GET");
+            methods = Collections.singletonList("ANY");
         }
         List<MappingInfo> mappings = new ArrayList<>();
         for (String method : methods) {

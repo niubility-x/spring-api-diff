@@ -48,7 +48,12 @@ class ProjectScannerTest {
             "POST /api/advanced/search",
             "GET /api/advanced/paged",
             "GET /internal/advanced/{id}",
-            "POST /internal/advanced/search");
+            "POST /internal/advanced/search",
+            "ANY /api/advanced/any-method",
+            "ANY /internal/advanced/any-method");
+
+        Endpoint anyMethod = endpoint(endpoints, "ANY /api/advanced/any-method");
+        assertThat(anyMethod.method()).isEqualTo("ANY");
 
         Endpoint get = endpoint(endpoints, "GET /api/advanced/{id}");
         assertThat(get.request().queryParams()).extracting("name", "type", "required")

@@ -46,6 +46,11 @@ public class AdvancedController {
         return null;
     }
 
+    @RequestMapping("/any-method")
+    public AdvancedResponse anyMethod() {
+        return null;
+    }
+
     @GetMapping("/paged")
     public Result<Page<AdvancedResponse>> paged() {
         return null;
