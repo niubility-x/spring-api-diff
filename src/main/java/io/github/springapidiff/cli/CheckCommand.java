@@ -2,12 +2,10 @@ package io.github.springapidiff.cli;
 
 import io.github.springapidiff.diff.Change;
 import io.github.springapidiff.diff.Severity;
-import io.github.springapidiff.diff.SnapshotDiffer;
 import io.github.springapidiff.model.ApiSnapshot;
 import io.github.springapidiff.report.ChangeAdvice;
 import io.github.springapidiff.report.JsonReportWriter;
 import io.github.springapidiff.report.MarkdownReportWriter;
-import io.github.springapidiff.scanner.ProjectScanner;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -124,40 +122,33 @@ public class CheckCommand implements Callable<Integer> {
         boolean useWorktree = effectiveWorktree || (effectiveHead == null && hasWorktreeChanges(repoRoot));
         String headRef = useWorktree ? "worktree" : (effectiveHead == null ? "HEAD" : effectiveHead);
 
-        GitCheckout baseCheckout = null;
-        GitCheckout headCheckout = null;
-        try {
-            progress(effectiveQuiet, 2, 7, "Preparing base source...");
-            baseCheckout = checkoutRef(repoRoot, baseRef, "base");
+        CheckRequest request = new CheckRequest(
+            repoRoot,
+            baseRef,
+            headRef,
+            useWorktree,
+            effectiveModule,
+            effectiveIncludeModules,
+            effectiveExcludeModules,
+            effectiveIncludes,
+            effectiveExcludes,
+            effectiveIgnoreEndpoints);
+        CheckResult result = new CompatibilityCheckService(gitClient)
+            .check(request, (step, total, message) -> progress(effectiveQuiet, step, total, message));
 
-            progress(effectiveQuiet, 3, 7, "Preparing head source...");
-            headCheckout = useWorktree ? GitCheckout.current(repoRoot) : checkoutRef(repoRoot, headRef, "head");
+        System.out.print(writeConsoleSummary(
+            result.changes(),
+            baseSelection,
+            headRef,
+            repoRoot,
+            result.headCheckoutPath(),
+            result.headScanPaths(),
+            result.oldSnapshot(),
+            result.newSnapshot()));
+        writeReportIfRequested(result.changes(), effectiveReport, normalizedFormat);
 
-            progress(effectiveQuiet, 4, 7, "Resolving scan paths...");
-            ScanPathResolver scanPathResolver = new ScanPathResolver(effectiveModule, effectiveIncludeModules, effectiveExcludeModules);
-            List<Path> baseScanPaths = scanPathResolver.resolve(baseCheckout.path());
-            List<Path> headScanPaths = scanPathResolver.resolve(headCheckout.path());
-            ProjectScanner scanner = new ProjectScanner();
-
-            progress(effectiveQuiet, 5, 7, "Scanning base APIs...");
-            ApiSnapshot oldSnapshot = scanSnapshot(scanner, scanPathResolver, baseScanPaths, baseRef, effectiveIncludes, effectiveExcludes);
-
-            progress(effectiveQuiet, 6, 7, "Scanning head APIs...");
-            ApiSnapshot newSnapshot = scanSnapshot(scanner, scanPathResolver, headScanPaths, headRef, effectiveIncludes, effectiveExcludes);
-
-            progress(effectiveQuiet, 7, 7, "Comparing snapshots...");
-            List<Change> changes = new ChangeFilter(effectiveIgnoreEndpoints)
-                .filter(new SnapshotDiffer().diff(oldSnapshot, newSnapshot));
-
-            System.out.print(writeConsoleSummary(changes, baseSelection, headRef, repoRoot, headCheckout.path(), headScanPaths, oldSnapshot, newSnapshot));
-            writeReportIfRequested(changes, effectiveReport, normalizedFormat);
-
-            boolean hasBreaking = changes.stream().anyMatch(change -> change.severity() == Severity.BREAKING);
-            return effectiveFailOnBreaking && hasBreaking ? 1 : 0;
-        } finally {
-            closeQuietly(headCheckout);
-            closeQuietly(baseCheckout);
-        }
+        boolean hasBreaking = result.changes().stream().anyMatch(change -> change.severity() == Severity.BREAKING);
+        return effectiveFailOnBreaking && hasBreaking ? 1 : 0;
     }
 
     private void progress(boolean quiet, int step, int total, String message) {
@@ -210,51 +201,6 @@ public class CheckCommand implements Callable<Integer> {
 
     private boolean hasWorktreeChanges(Path repoRoot) throws IOException, InterruptedException {
         return !gitClient.output(repoRoot, "status", "--porcelain").trim().isEmpty();
-    }
-
-    private GitCheckout checkoutRef(Path repoRoot, String ref, String label) throws IOException, InterruptedException {
-        String commit;
-        try {
-            commit = gitClient.output(repoRoot, "rev-parse", "--verify", ref + "^{commit}").trim();
-        } catch (IOException e) {
-            throw new UserFacingException(
-                "Git ref not found: " + ref + "\n"
-                    + "Check the branch, tag, or commit exists locally. If it is a remote branch, run git fetch first.");
-        }
-        return GitCheckout.temporary(gitClient, repoRoot, commit, label);
-    }
-
-    private ApiSnapshot scanSnapshot(
-        ProjectScanner scanner,
-        ScanPathResolver scanPathResolver,
-        List<Path> paths,
-        String ref,
-        List<String> effectiveIncludes,
-        List<String> effectiveExcludes) throws IOException {
-        List<ApiSnapshot> snapshots = new ArrayList<>();
-        for (Path path : paths) {
-            try {
-                snapshots.add(scanner.scan(path, effectiveIncludes, effectiveExcludes));
-            } catch (IOException e) {
-                if (e.getMessage() != null && e.getMessage().contains("Java source root not found")) {
-                    throw scanPathResolver.sourceRootNotFound(ref);
-                }
-                throw e;
-            }
-        }
-        if (snapshots.size() == 1) {
-            return snapshots.get(0);
-        }
-        List<io.github.springapidiff.model.Endpoint> endpoints = new ArrayList<>();
-        for (ApiSnapshot snapshot : snapshots) {
-            endpoints.addAll(snapshot.endpoints());
-        }
-        Collections.sort(endpoints, Comparator.comparing(io.github.springapidiff.model.Endpoint::id));
-        return new ApiSnapshot(
-            "1",
-            snapshots.get(0).generatedAt(),
-            new io.github.springapidiff.model.ProjectInfo(paths.get(0).getParent().getFileName().toString(), "unknown", "unknown"),
-            endpoints);
     }
 
     private void writeReportIfRequested(List<Change> changes, Path effectiveReport, String normalizedFormat) throws IOException {
@@ -374,17 +320,6 @@ public class CheckCommand implements Callable<Integer> {
             summary.append("  Suggestion: ").append(ChangeAdvice.suggestion(change)).append("\n");
         }
         summary.append("\n");
-    }
-
-    private void closeQuietly(GitCheckout checkout) {
-        if (checkout == null) {
-            return;
-        }
-        try {
-            checkout.close();
-        } catch (IOException | InterruptedException ignored) {
-            // Cleanup failures should not hide the actual check result.
-        }
     }
 
 }
