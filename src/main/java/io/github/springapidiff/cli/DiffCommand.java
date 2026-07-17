@@ -7,6 +7,7 @@ import io.github.springapidiff.io.SnapshotReader;
 import io.github.springapidiff.model.ApiSnapshot;
 import io.github.springapidiff.report.JsonReportWriter;
 import io.github.springapidiff.report.MarkdownReportWriter;
+import io.github.springapidiff.validation.DuplicateEndpointIdException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,23 +40,28 @@ public class DiffCommand implements Callable<Integer> {
         if (!"markdown".equals(normalizedFormat) && !"json".equals(normalizedFormat)) {
             throw new IllegalArgumentException("Unsupported report format: " + format + ". Supported: markdown, json");
         }
-        SnapshotReader reader = new SnapshotReader();
-        ApiSnapshot oldSnapshot = reader.read(oldSnapshotPath);
-        ApiSnapshot newSnapshot = reader.read(newSnapshotPath);
-        List<Change> changes = new SnapshotDiffer().diff(oldSnapshot, newSnapshot);
-        String output = writeReport(changes, normalizedFormat);
-        if (report == null) {
-            System.out.print(output);
-        } else {
-            Path parent = report.toAbsolutePath().getParent();
-            if (parent != null) {
-                Files.createDirectories(parent);
+        try {
+            SnapshotReader reader = new SnapshotReader();
+            ApiSnapshot oldSnapshot = reader.read(oldSnapshotPath);
+            ApiSnapshot newSnapshot = reader.read(newSnapshotPath);
+            List<Change> changes = new SnapshotDiffer().diff(oldSnapshot, newSnapshot);
+            String output = writeReport(changes, normalizedFormat);
+            if (report == null) {
+                System.out.print(output);
+            } else {
+                Path parent = report.toAbsolutePath().getParent();
+                if (parent != null) {
+                    Files.createDirectories(parent);
+                }
+                Files.write(report, output.getBytes(StandardCharsets.UTF_8));
+                System.out.println("Wrote report: " + report.toAbsolutePath());
             }
-            Files.write(report, output.getBytes(StandardCharsets.UTF_8));
-            System.out.println("Wrote report: " + report.toAbsolutePath());
+            boolean hasBreaking = changes.stream().anyMatch(change -> change.severity() == Severity.BREAKING);
+            return failOnBreaking && hasBreaking ? 1 : 0;
+        } catch (DuplicateEndpointIdException e) {
+            System.err.println(e.getMessage());
+            return 2;
         }
-        boolean hasBreaking = changes.stream().anyMatch(change -> change.severity() == Severity.BREAKING);
-        return failOnBreaking && hasBreaking ? 1 : 0;
     }
 
     private String writeReport(List<Change> changes, String normalizedFormat) throws Exception {

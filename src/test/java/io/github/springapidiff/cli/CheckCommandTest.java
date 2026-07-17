@@ -418,6 +418,25 @@ class CheckCommandTest {
             .contains("\"summary\"", "\"severity\" : \"BREAKING\"", "\"endpoint\" : \"GET /api/users/{id}\"");
     }
 
+    @Test
+    void returnsTwoWithoutWritingReportForDuplicateEndpoints() throws Exception {
+        Path repo = initRepoWithFixture("duplicate-endpoints");
+        Path report = tempDir.resolve("duplicate-report.md");
+        Files.write(report, "existing".getBytes(StandardCharsets.UTF_8));
+
+        CommandResult result = runCheck(
+            "--repo", repo.toString(),
+            "--base", "main",
+            "--worktree",
+            "--quiet",
+            "--report", report.toString());
+
+        assertThat(result.exitCode).isEqualTo(2);
+        assertThat(result.output).isEmpty();
+        assertThat(result.errorOutput).contains("Duplicate endpoint IDs detected:", "GET /duplicate");
+        assertThat(new String(Files.readAllBytes(report), StandardCharsets.UTF_8)).isEqualTo("existing");
+    }
+
     private Path initRepoWithFixture(String fixture) throws Exception {
         Path repo = tempDir.resolve("repo-" + fixture);
         Files.createDirectories(repo);

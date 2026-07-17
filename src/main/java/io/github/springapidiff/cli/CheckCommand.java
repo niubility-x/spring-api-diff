@@ -6,6 +6,7 @@ import io.github.springapidiff.model.ApiSnapshot;
 import io.github.springapidiff.report.ChangeAdvice;
 import io.github.springapidiff.report.JsonReportWriter;
 import io.github.springapidiff.report.MarkdownReportWriter;
+import io.github.springapidiff.validation.DuplicateEndpointIdException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -82,7 +83,7 @@ public class CheckCommand implements Callable<Integer> {
     public Integer call() throws Exception {
         try {
             return run();
-        } catch (UserFacingException e) {
+        } catch (UserFacingException | DuplicateEndpointIdException e) {
             System.err.println(e.getMessage());
             return 2;
         }

@@ -6,12 +6,14 @@ import io.github.springapidiff.model.ApiSnapshot;
 import io.github.springapidiff.model.Endpoint;
 import io.github.springapidiff.model.ProjectInfo;
 import io.github.springapidiff.scanner.ProjectScanner;
+import io.github.springapidiff.validation.SnapshotValidator;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 
 class CompatibilityCheckService {
     private final GitClient gitClient;
@@ -48,11 +50,21 @@ class CompatibilityCheckService {
 
             progressListener.onProgress(5, 7, "Scanning base APIs...");
             ApiSnapshot oldSnapshot = scanSnapshot(
-                scanPathResolver, baseScanPaths, request.baseRef(), request.includes(), request.excludes());
+                scanPathResolver,
+                baseCheckout.path(),
+                baseScanPaths,
+                request.baseRef(),
+                request.includes(),
+                request.excludes());
 
             progressListener.onProgress(6, 7, "Scanning head APIs...");
             ApiSnapshot newSnapshot = scanSnapshot(
-                scanPathResolver, headScanPaths, request.headRef(), request.includes(), request.excludes());
+                scanPathResolver,
+                headCheckout.path(),
+                headScanPaths,
+                request.headRef(),
+                request.includes(),
+                request.excludes());
 
             progressListener.onProgress(7, 7, "Comparing snapshots...");
             List<Change> changes = new ChangeFilter(request.ignoreEndpoints())
@@ -78,14 +90,21 @@ class CompatibilityCheckService {
 
     private ApiSnapshot scanSnapshot(
         ScanPathResolver scanPathResolver,
+        Path checkoutRoot,
         List<Path> paths,
         String ref,
         List<String> includes,
         List<String> excludes) throws IOException {
         List<ApiSnapshot> snapshots = new ArrayList<>();
+        Map<Endpoint, String> sources = new IdentityHashMap<>();
         for (Path path : paths) {
+            String source = modulePath(checkoutRoot, path);
             try {
-                snapshots.add(scanner.scan(path, includes, excludes));
+                ApiSnapshot snapshot = scanner.scan(path, includes, excludes, source);
+                snapshots.add(snapshot);
+                for (Endpoint endpoint : snapshot.endpoints()) {
+                    sources.put(endpoint, source);
+                }
             } catch (IOException e) {
                 if (e.getMessage() != null && e.getMessage().contains("Java source root not found")) {
                     throw scanPathResolver.sourceRootNotFound(ref);
@@ -100,12 +119,20 @@ class CompatibilityCheckService {
         for (ApiSnapshot snapshot : snapshots) {
             endpoints.addAll(snapshot.endpoints());
         }
-        Collections.sort(endpoints, Comparator.comparing(Endpoint::id));
-        return new ApiSnapshot(
+        Collections.sort(endpoints, java.util.Comparator.comparing(Endpoint::id));
+        ApiSnapshot aggregate = new ApiSnapshot(
             "1",
             snapshots.get(0).generatedAt(),
             new ProjectInfo(paths.get(0).getParent().getFileName().toString(), "unknown", "unknown"),
             endpoints);
+        new SnapshotValidator().validate(aggregate, sources::get);
+        return aggregate;
+    }
+
+    private String modulePath(Path checkoutRoot, Path path) {
+        Path relative = checkoutRoot.relativize(path).normalize();
+        String value = relative.toString().replace('\\', '/');
+        return value.isEmpty() ? "." : value;
     }
 
     private void closeQuietly(GitCheckout checkout) {

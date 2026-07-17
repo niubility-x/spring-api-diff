@@ -5,6 +5,7 @@ import io.github.springapidiff.model.ApiField;
 import io.github.springapidiff.model.ApiParameter;
 import io.github.springapidiff.model.ApiSnapshot;
 import io.github.springapidiff.model.Endpoint;
+import io.github.springapidiff.validation.SnapshotValidator;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -15,6 +16,9 @@ import java.util.stream.Collectors;
 
 public class SnapshotDiffer {
     public List<Change> diff(ApiSnapshot oldSnapshot, ApiSnapshot newSnapshot) {
+        SnapshotValidator validator = new SnapshotValidator();
+        validator.validate(oldSnapshot, endpoint -> "old snapshot");
+        validator.validate(newSnapshot, endpoint -> "new snapshot");
         Map<String, Endpoint> oldEndpoints = byId(oldSnapshot.endpoints());
         Map<String, Endpoint> newEndpoints = byId(newSnapshot.endpoints());
         List<Change> changes = new ArrayList<>();
@@ -218,8 +222,11 @@ public class SnapshotDiffer {
     }
 
     private Map<String, Endpoint> byId(List<Endpoint> endpoints) {
-        return endpoints.stream()
-            .collect(Collectors.toMap(Endpoint::id, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+        Map<String, Endpoint> byId = new LinkedHashMap<>();
+        for (Endpoint endpoint : endpoints) {
+            byId.put(endpoint.id(), endpoint);
+        }
+        return byId;
     }
 
     private <T> Map<String, T> byName(List<T> values, Function<T, String> key) {

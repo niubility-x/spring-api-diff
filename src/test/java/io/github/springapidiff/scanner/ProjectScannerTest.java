@@ -1,9 +1,11 @@
 package io.github.springapidiff.scanner;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.groups.Tuple.tuple;
 
 import io.github.springapidiff.model.Endpoint;
+import io.github.springapidiff.validation.DuplicateEndpointIdException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collections;
@@ -142,6 +144,18 @@ class ProjectScannerTest {
                 "/api/shared/parameter-conflict",
                 "/api/left/leaked",
                 "/api/right/leaked");
+    }
+
+    @Test
+    void rejectsDuplicateEndpointIdsFromDifferentControllers() {
+        Path fixture = Paths.get("src/test/resources/fixtures/duplicate-endpoints");
+
+        assertThatThrownBy(() -> new ProjectScanner().scan(fixture, Collections.emptyList(), Collections.emptyList()))
+            .isInstanceOf(DuplicateEndpointIdException.class)
+            .hasMessageContaining(
+                "GET /duplicate",
+                "com.example.duplicate.FirstController#first",
+                "com.example.duplicate.SecondController#second");
     }
 
     private Endpoint endpoint(List<Endpoint> endpoints, String id) {

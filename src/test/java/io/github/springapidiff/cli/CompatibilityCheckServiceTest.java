@@ -3,6 +3,7 @@ package io.github.springapidiff.cli;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.springapidiff.validation.DuplicateEndpointIdException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -84,6 +85,45 @@ class CompatibilityCheckServiceTest {
         assertThat(gitClient.output(repo, "worktree", "list", "--porcelain")).isEqualTo(worktreesBefore);
     }
 
+    @Test
+    void reportsCrossModuleEndpointConflictsAndCleansWorktrees() throws Exception {
+        Path repo = initRepoWithDuplicateModules("demo-v1");
+        String worktreesBefore = gitClient.output(repo, "worktree", "list", "--porcelain");
+        CheckRequest request = new CheckRequest(
+            repo,
+            "main",
+            "HEAD",
+            false,
+            null,
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Collections.emptyList());
+
+        assertThatThrownBy(() -> new CompatibilityCheckService(gitClient)
+            .check(request, (step, total, message) -> { }))
+            .isInstanceOf(DuplicateEndpointIdException.class)
+            .hasMessageContaining(
+                "GET /api/users/{id}",
+                "[services/user-service] com.example.demo.UserController#getUser",
+                "[tools/audit-service] com.example.demo.UserController#getUser");
+
+        assertThat(gitClient.output(repo, "worktree", "list", "--porcelain")).isEqualTo(worktreesBefore);
+    }
+
+    private Path initRepoWithDuplicateModules(String fixture) throws Exception {
+        Path repo = tempDir.resolve("repo-duplicate-modules-" + fixture);
+        Files.createDirectories(repo);
+        gitClient.output(repo, "init", "-b", "main");
+        gitClient.output(repo, "config", "user.name", "test");
+        gitClient.output(repo, "config", "user.email", "test@example.com");
+        copyFixtureToPath(fixture, repo.resolve("services/user-service"));
+        copyFixtureToPath(fixture, repo.resolve("tools/audit-service"));
+        gitClient.output(repo, "add", ".");
+        gitClient.output(repo, "commit", "-m", "initial api");
+        return repo;
+    }
     private Path initRepoWithModules(String fixture) throws Exception {
         Path repo = tempDir.resolve("repo-modules-" + fixture);
         Files.createDirectories(repo);
@@ -92,6 +132,7 @@ class CompatibilityCheckServiceTest {
         gitClient.output(repo, "config", "user.email", "test@example.com");
         copyFixtureToPath(fixture, repo.resolve("services/user-service"));
         copyFixtureToPath(fixture, repo.resolve("tools/audit-service"));
+        replaceInJavaSources(repo.resolve("tools/audit-service"), "/api/users", "/api/audit-users");
         gitClient.output(repo, "add", ".");
         gitClient.output(repo, "commit", "-m", "initial api");
         return repo;
@@ -121,6 +162,16 @@ class CompatibilityCheckServiceTest {
                     Files.createDirectories(targetPath.getParent());
                     Files.copy(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
                 }
+            }
+        }
+    }
+
+    private void replaceInJavaSources(Path root, String oldValue, String newValue) throws IOException {
+        try (Stream<Path> paths = Files.walk(root.resolve("src/main/java"))) {
+            for (Path path : paths.filter(value -> value.toString().endsWith(".java"))
+                .collect(java.util.stream.Collectors.toList())) {
+                String content = new String(Files.readAllBytes(path), java.nio.charset.StandardCharsets.UTF_8);
+                Files.write(path, content.replace(oldValue, newValue).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }
         }
     }

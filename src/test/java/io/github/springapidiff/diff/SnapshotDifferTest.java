@@ -1,6 +1,7 @@
 package io.github.springapidiff.diff;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.springapidiff.model.ApiBody;
 import io.github.springapidiff.model.ApiField;
@@ -11,6 +12,7 @@ import io.github.springapidiff.model.ApiSnapshot;
 import io.github.springapidiff.model.Endpoint;
 import io.github.springapidiff.model.ProjectInfo;
 import io.github.springapidiff.scanner.ProjectScanner;
+import io.github.springapidiff.validation.DuplicateEndpointIdException;
 import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.Arrays;
@@ -107,6 +109,30 @@ class SnapshotDifferTest {
         assertThat(new SnapshotDiffer().diff(oldSnapshot, newSnapshot)).isEmpty();
     }
 
+    @Test
+    void rejectsDuplicateEndpointIdsInDirectlyConstructedSnapshots() {
+        ApiSnapshot duplicateOld = snapshot(
+            Collections.emptyList(),
+            Collections.emptyList());
+        duplicateOld.setEndpoints(Arrays.asList(
+            duplicateOld.endpoints().get(0),
+            duplicateOld.endpoints().get(0)));
+        ApiSnapshot uniqueNew = snapshot(Collections.emptyList(), Collections.emptyList());
+
+        assertThatThrownBy(() -> new SnapshotDiffer().diff(duplicateOld, uniqueNew))
+            .isInstanceOf(DuplicateEndpointIdException.class)
+            .hasMessageContaining("[old snapshot] UserController#create");
+
+        ApiSnapshot uniqueOld = snapshot(Collections.emptyList(), Collections.emptyList());
+        ApiSnapshot duplicateNew = snapshot(Collections.emptyList(), Collections.emptyList());
+        duplicateNew.setEndpoints(Arrays.asList(
+            duplicateNew.endpoints().get(0),
+            duplicateNew.endpoints().get(0)));
+
+        assertThatThrownBy(() -> new SnapshotDiffer().diff(uniqueOld, duplicateNew))
+            .isInstanceOf(DuplicateEndpointIdException.class)
+            .hasMessageContaining("[new snapshot] UserController#create");
+    }
     private ApiSnapshot snapshot(List<ApiParameter> queryParams, List<ApiField> bodyFields) {
         ApiBody body = bodyFields.isEmpty() ? null : new ApiBody("Request", bodyFields);
         Endpoint endpoint = new Endpoint(

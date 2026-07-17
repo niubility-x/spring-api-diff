@@ -6,6 +6,7 @@ import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import io.github.springapidiff.model.ApiSnapshot;
 import io.github.springapidiff.model.Endpoint;
 import io.github.springapidiff.model.ProjectInfo;
+import io.github.springapidiff.validation.SnapshotValidator;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -19,6 +20,14 @@ import java.util.stream.Stream;
 
 public class ProjectScanner {
     public ApiSnapshot scan(Path projectPath, List<String> includes, List<String> excludes) throws IOException {
+        return scan(projectPath, includes, excludes, projectPath.toAbsolutePath().normalize().toString());
+    }
+
+    public ApiSnapshot scan(
+        Path projectPath,
+        List<String> includes,
+        List<String> excludes,
+        String sourceContext) throws IOException {
         Path sourceRoot = projectPath.resolve("src/main/java");
         if (!Files.isDirectory(sourceRoot)) {
             throw new IOException("Java source root not found: " + sourceRoot);
@@ -36,11 +45,13 @@ public class ProjectScanner {
             .sorted(Comparator.comparing(Endpoint::id))
             .collect(java.util.stream.Collectors.toList());
 
-        return new ApiSnapshot(
+        ApiSnapshot snapshot = new ApiSnapshot(
             "1",
             Instant.now(),
             new ProjectInfo(projectPath.toAbsolutePath().getFileName().toString(), "unknown", "unknown"),
             endpoints);
+        new SnapshotValidator().validate(snapshot, endpoint -> sourceContext);
+        return snapshot;
     }
 
     private List<CompilationUnit> parseUnits(Path sourceRoot) throws IOException {
