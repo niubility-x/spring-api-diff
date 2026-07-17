@@ -84,6 +84,27 @@ class ProjectScannerTest {
                 tuple("nickname", false));
     }
 
+    @Test
+    void resolvesConstantMappingPathsAndSkipsUnresolvedMappings() throws Exception {
+        Path fixture = Paths.get("src/test/resources/fixtures/constants");
+
+        List<Endpoint> endpoints = new ProjectScanner().scan(fixture, Collections.emptyList(), Collections.emptyList()).endpoints();
+
+        assertThat(endpoints).extracting(Endpoint::id).containsExactly(
+            "GET /api/admin/lookup",
+            "GET /api/admin/search",
+            "GET /api/admin/{id}",
+            "GET /api/users/lookup",
+            "GET /api/users/search",
+            "GET /api/users/{id}",
+            "POST /api/admin/lookup",
+            "POST /api/admin/search",
+            "POST /api/users/lookup",
+            "POST /api/users/search");
+        assertThat(endpoints).extracting(Endpoint::path)
+            .doesNotContain("/", "/unknown", "/leaked");
+    }
+
     private Endpoint endpoint(List<Endpoint> endpoints, String id) {
         return endpoints.stream()
             .filter(endpoint -> endpoint.id().equals(id))

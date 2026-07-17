@@ -18,10 +18,16 @@ import java.util.Optional;
 
 public class ControllerScanner {
     private final DtoScanner dtoScanner;
+    private final StringConstantResolver constantResolver;
     private final SpringAnnotationParser annotationParser = new SpringAnnotationParser();
 
     public ControllerScanner(DtoScanner dtoScanner) {
+        this(dtoScanner, new StringConstantResolver(java.util.Collections.emptyList()));
+    }
+
+    ControllerScanner(DtoScanner dtoScanner, StringConstantResolver constantResolver) {
         this.dtoScanner = dtoScanner;
+        this.constantResolver = constantResolver;
     }
 
     public List<Endpoint> scan(CompilationUnit unit) {
@@ -31,13 +37,21 @@ public class ControllerScanner {
                 continue;
             }
             String controllerName = controllerName(unit, type);
-            List<String> classPaths = annotationParser.findAnnotation(type, "RequestMapping")
-                .map(annotationParser::paths)
-                .filter(paths -> !paths.isEmpty())
-                .orElse(java.util.Collections.singletonList("/"));
+            SpringAnnotationParser.PathValues classPathValues = annotationParser.findAnnotation(type, "RequestMapping")
+                .map(annotation -> annotationParser.pathValues(annotation, type, constantResolver))
+                .orElse(null);
+            if (classPathValues != null
+                && (classPathValues.status() == SpringAnnotationParser.PathStatus.UNRESOLVED
+                    || classPathValues.values().isEmpty() && classPathValues.status() == SpringAnnotationParser.PathStatus.RESOLVED)) {
+                continue;
+            }
+            List<String> classPaths = classPathValues == null
+                || classPathValues.status() == SpringAnnotationParser.PathStatus.ABSENT
+                ? java.util.Collections.singletonList("/")
+                : classPathValues.values();
             for (MethodDeclaration method : type.getMethods()) {
                 for (AnnotationExpr annotation : method.getAnnotations()) {
-                    for (SpringAnnotationParser.MappingInfo mapping : annotationParser.mappings(annotation)) {
+                    for (SpringAnnotationParser.MappingInfo mapping : annotationParser.mappings(annotation, type, constantResolver)) {
                         for (String classPath : classPaths) {
                             endpoints.add(endpoint(controllerName, method, classPath, mapping));
                         }

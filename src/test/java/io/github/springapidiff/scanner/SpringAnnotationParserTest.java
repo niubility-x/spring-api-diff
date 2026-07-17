@@ -46,6 +46,25 @@ class SpringAnnotationParserTest {
             .containsExactly(tuple("ANY", "/users"));
     }
 
+    @Test
+    void skipsExplicitUnresolvedAndEmptyPaths() {
+        assertThat(parser.mappings(annotation("@GetMapping(UNKNOWN)"))).isEmpty();
+        assertThat(parser.mappings(annotation("@GetMapping({\"/users\", UNKNOWN})"))).isEmpty();
+        assertThat(parser.mappings(annotation("@GetMapping(path = {})"))).isEmpty();
+    }
+
+    @Test
+    void doesNotFallbackToValueWhenExplicitPathIsUnresolved() {
+        assertThat(parser.mappings(annotation("@GetMapping(path = UNKNOWN, value = \"/users\")"))).isEmpty();
+    }
+
+    @Test
+    void resolvesLiteralConcatenation() {
+        assertThat(parser.mappings(annotation("@GetMapping((\"/api\" + \"/users\"))")))
+            .extracting(SpringAnnotationParser.MappingInfo::method, SpringAnnotationParser.MappingInfo::path)
+            .containsExactly(tuple("GET", "/api/users"));
+    }
+
     private AnnotationExpr annotation(String source) {
         return StaticJavaParser.parseAnnotation(source);
     }
