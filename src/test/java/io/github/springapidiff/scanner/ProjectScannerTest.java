@@ -105,6 +105,45 @@ class ProjectScannerTest {
             .doesNotContain("/", "/unknown", "/leaked");
     }
 
+    @Test
+    void inheritsDirectInterfaceControllerContractsAndSkipsConflicts() throws Exception {
+        Path fixture = Paths.get("src/test/resources/fixtures/interface-contracts");
+
+        List<Endpoint> endpoints = new ProjectScanner().scan(fixture, Collections.emptyList(), Collections.emptyList()).endpoints();
+
+        assertThat(endpoints).extracting(Endpoint::id).containsExactly(
+            "GET /api/contracts/by-id",
+            "GET /api/contracts/by-name",
+            "GET /api/contracts/{id}",
+            "GET /api/shared/same",
+            "POST /api/contracts/body",
+            "POST /api/contracts/custom");
+
+        Endpoint inherited = endpoint(endpoints, "GET /api/contracts/{id}");
+        assertThat(inherited.request().pathVariables()).extracting("name", "type", "required")
+            .containsExactly(tuple("contractId", "Long", true));
+        assertThat(inherited.request().queryParams()).extracting("name", "type", "required")
+            .containsExactly(tuple("filter", "String", false));
+        assertThat(inherited.response().fields()).extracting("name", "type")
+            .containsExactly(tuple("id", "Long"), tuple("name", "String"));
+
+        Endpoint body = endpoint(endpoints, "POST /api/contracts/body");
+        assertThat(body.request().body().fields()).extracting("name", "required")
+            .containsExactly(tuple("name", false));
+
+        Endpoint overridden = endpoint(endpoints, "POST /api/contracts/custom");
+        assertThat(overridden.request().queryParams()).extracting("name", "required")
+            .containsExactly(tuple("implementationName", false));
+
+        assertThat(endpoints).extracting(Endpoint::path)
+            .doesNotContain(
+                "/api/shared/mapping-conflict-a",
+                "/api/shared/mapping-conflict-b",
+                "/api/shared/parameter-conflict",
+                "/api/left/leaked",
+                "/api/right/leaked");
+    }
+
     private Endpoint endpoint(List<Endpoint> endpoints, String id) {
         return endpoints.stream()
             .filter(endpoint -> endpoint.id().equals(id))

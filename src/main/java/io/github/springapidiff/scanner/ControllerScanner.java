@@ -4,7 +4,6 @@ import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.Parameter;
-import com.github.javaparser.ast.expr.AnnotationExpr;
 import io.github.springapidiff.model.ApiBody;
 import io.github.springapidiff.model.ApiParameter;
 import io.github.springapidiff.model.ApiRequest;
@@ -13,21 +12,29 @@ import io.github.springapidiff.model.Endpoint;
 import io.github.springapidiff.util.PathUtils;
 import io.github.springapidiff.util.TypeNameNormalizer;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
 public class ControllerScanner {
     private final DtoScanner dtoScanner;
-    private final StringConstantResolver constantResolver;
     private final SpringAnnotationParser annotationParser = new SpringAnnotationParser();
+    private final ControllerContractResolver contractResolver;
 
     public ControllerScanner(DtoScanner dtoScanner) {
-        this(dtoScanner, new StringConstantResolver(java.util.Collections.emptyList()));
+        this(
+            dtoScanner,
+            new StringConstantResolver(Collections.emptyList()),
+            new SourceTypeIndex(Collections.emptyList()));
     }
 
     ControllerScanner(DtoScanner dtoScanner, StringConstantResolver constantResolver) {
+        this(dtoScanner, constantResolver, new SourceTypeIndex(Collections.emptyList()));
+    }
+
+    ControllerScanner(DtoScanner dtoScanner, StringConstantResolver constantResolver, SourceTypeIndex typeIndex) {
         this.dtoScanner = dtoScanner;
-        this.constantResolver = constantResolver;
+        this.contractResolver = new ControllerContractResolver(typeIndex, constantResolver, annotationParser);
     }
 
     public List<Endpoint> scan(CompilationUnit unit) {
@@ -36,25 +43,24 @@ public class ControllerScanner {
             if (!isRestController(type)) {
                 continue;
             }
-            String controllerName = controllerName(unit, type);
-            SpringAnnotationParser.PathValues classPathValues = annotationParser.findAnnotation(type, "RequestMapping")
-                .map(annotation -> annotationParser.pathValues(annotation, type, constantResolver))
-                .orElse(null);
-            if (classPathValues != null
-                && (classPathValues.status() == SpringAnnotationParser.PathStatus.UNRESOLVED
-                    || classPathValues.values().isEmpty() && classPathValues.status() == SpringAnnotationParser.PathStatus.RESOLVED)) {
+            Optional<ControllerContractResolver.ControllerContract> contract = contractResolver.resolve(type);
+            if (!contract.isPresent()) {
                 continue;
             }
-            List<String> classPaths = classPathValues == null
-                || classPathValues.status() == SpringAnnotationParser.PathStatus.ABSENT
-                ? java.util.Collections.singletonList("/")
-                : classPathValues.values();
+            String controllerName = controllerName(unit, type);
             for (MethodDeclaration method : type.getMethods()) {
-                for (AnnotationExpr annotation : method.getAnnotations()) {
-                    for (SpringAnnotationParser.MappingInfo mapping : annotationParser.mappings(annotation, type, constantResolver)) {
-                        for (String classPath : classPaths) {
-                            endpoints.add(endpoint(controllerName, method, classPath, mapping));
-                        }
+                Optional<ControllerContractResolver.MethodContract> methodContract = contract.get().method(method);
+                if (!methodContract.isPresent()) {
+                    continue;
+                }
+                for (SpringAnnotationParser.MappingInfo mapping : methodContract.get().mappings()) {
+                    for (String classPath : contract.get().classPaths()) {
+                        endpoints.add(endpoint(
+                            controllerName,
+                            method,
+                            methodContract.get().parameters(),
+                            classPath,
+                            mapping));
                     }
                 }
             }
@@ -70,45 +76,39 @@ public class ControllerScanner {
     private Endpoint endpoint(
         String controllerName,
         MethodDeclaration method,
+        List<ParameterContractResolver.ParameterContract> parameters,
         String classPath,
         SpringAnnotationParser.MappingInfo mapping) {
         String path = PathUtils.join(classPath, mapping.path());
-        ApiRequest request = request(method);
+        ApiRequest request = request(method, parameters);
         String responseType = TypeNameNormalizer.normalize(method.getType());
         ApiResponse response = new ApiResponse(responseType, dtoScanner.fieldsFor(responseType));
         String id = mapping.method() + " " + path;
         return new Endpoint(id, mapping.method(), path, controllerName, method.getNameAsString(), request, response);
     }
 
-    private ApiRequest request(MethodDeclaration method) {
+    private ApiRequest request(
+        MethodDeclaration method,
+        List<ParameterContractResolver.ParameterContract> contracts) {
         List<ApiParameter> pathVariables = new ArrayList<>();
         List<ApiParameter> queryParams = new ArrayList<>();
         ApiBody body = null;
-        for (Parameter parameter : method.getParameters()) {
+        for (int index = 0; index < method.getParameters().size(); index++) {
+            Parameter parameter = method.getParameter(index);
+            ParameterContractResolver.ParameterContract contract = contracts.get(index);
             String type = TypeNameNormalizer.normalize(parameter.getType());
-            Optional<AnnotationExpr> pathVariable = annotationParser.findAnnotation(parameter, "PathVariable");
-            if (pathVariable.isPresent()) {
-                pathVariables.add(new ApiParameter(parameterName(pathVariable.get(), parameter), type, true));
-                continue;
-            }
-            Optional<AnnotationExpr> requestParam = annotationParser.findAnnotation(parameter, "RequestParam");
-            if (requestParam.isPresent()) {
-                boolean required = annotationParser.required(parameter, "RequestParam", true);
-                queryParams.add(new ApiParameter(parameterName(requestParam.get(), parameter), type, required));
-                continue;
-            }
-            if (annotationParser.hasAnnotation(parameter, "RequestBody")) {
-                boolean required = annotationParser.required(parameter, "RequestBody", true);
+            if (contract.kind() == ParameterContractResolver.BindingKind.PATH_VARIABLE) {
+                pathVariables.add(new ApiParameter(contract.name(), type, true));
+            } else if (contract.kind() == ParameterContractResolver.BindingKind.REQUEST_PARAM) {
+                queryParams.add(new ApiParameter(contract.name(), type, contract.required()));
+            } else if (contract.kind() == ParameterContractResolver.BindingKind.REQUEST_BODY) {
                 body = new ApiBody(type, dtoScanner.fieldsFor(type).stream()
-                    .map(field -> new io.github.springapidiff.model.ApiField(field.name(), field.type(), required && field.required()))
+                    .map(field -> new io.github.springapidiff.model.ApiField(
+                        field.name(), field.type(), contract.required() && field.required()))
                     .collect(java.util.stream.Collectors.toList()));
             }
         }
         return new ApiRequest(pathVariables, queryParams, body);
-    }
-
-    private String parameterName(AnnotationExpr annotation, Parameter parameter) {
-        return annotationParser.namedValue(annotation).orElse(parameter.getNameAsString());
     }
 
     private String controllerName(CompilationUnit unit, ClassOrInterfaceDeclaration type) {

@@ -26,9 +26,10 @@ public class ProjectScanner {
 
         List<CompilationUnit> units = parseUnits(sourceRoot);
         Map<String, ClassOrInterfaceDeclaration> classes = indexClasses(units);
+        SourceTypeIndex typeIndex = new SourceTypeIndex(units);
         DtoScanner dtoScanner = new DtoScanner(classes);
         StringConstantResolver constantResolver = new StringConstantResolver(units);
-        ControllerScanner controllerScanner = new ControllerScanner(dtoScanner, constantResolver);
+        ControllerScanner controllerScanner = new ControllerScanner(dtoScanner, constantResolver, typeIndex);
         List<Endpoint> endpoints = units.stream()
             .flatMap(unit -> controllerScanner.scan(unit).stream())
             .filter(endpoint -> included(endpoint.controller(), includes, excludes))
