@@ -41,7 +41,8 @@ class CheckCommandTest {
             "--fail-on-breaking");
 
         assertThat(result.exitCode).isEqualTo(1);
-        assertThat(result.output).contains("BREAKING", "Impact:", "Suggestion:");
+        assertThat(result.output).isEmpty();
+        assertThat(result.errorOutput).contains("Wrote report:");
         assertThat(Files.readAllBytes(report))
             .asString(StandardCharsets.UTF_8)
             .contains("# API Compatibility Report", "**Impact:**", "**Suggestion:**");
@@ -221,6 +222,44 @@ class CheckCommandTest {
     }
 
     @Test
+    void printsFriendlyMessageWhenRepoPathIsInvalid() throws Exception {
+        Path missing = tempDir.resolve("missing-repo");
+
+        CommandResult missingResult = runCheck("--repo", missing.toString());
+
+        assertThat(missingResult.exitCode).isEqualTo(2);
+        assertThat(missingResult.output).isEmpty();
+        assertThat(missingResult.errorOutput)
+            .contains("Git repository path is not a directory", missing.toAbsolutePath().normalize().toString())
+            .doesNotContain("Exception", "at io.github");
+
+        Path file = tempDir.resolve("repo-file");
+        Files.write(file, "not a directory".getBytes(StandardCharsets.UTF_8));
+
+        CommandResult fileResult = runCheck("--repo", file.toString());
+
+        assertThat(fileResult.exitCode).isEqualTo(2);
+        assertThat(fileResult.output).isEmpty();
+        assertThat(fileResult.errorOutput)
+            .contains("Git repository path is not a directory", file.toAbsolutePath().normalize().toString())
+            .doesNotContain("Exception", "at io.github");
+    }
+
+    @Test
+    void printsFriendlyMessageForInvalidConfig() throws Exception {
+        Path repo = initRepoWithFixture("demo-v1");
+        Files.write(repo.resolve("spring-api-diff.yml"), "modules: [".getBytes(StandardCharsets.UTF_8));
+
+        CommandResult result = runCheck("--repo", repo.toString());
+
+        assertThat(result.exitCode).isEqualTo(2);
+        assertThat(result.output).isEmpty();
+        assertThat(result.errorOutput)
+            .contains("Invalid spring-api-diff.yml")
+            .doesNotContain("JsonParseException", "at io.github");
+    }
+
+    @Test
     void fetchesMissingCiTargetBranchWhenRequested() throws Exception {
         Path seed = tempDir.resolve("fetch-seed");
         Files.createDirectories(seed);
@@ -350,7 +389,24 @@ class CheckCommandTest {
         CommandResult result = runCheck("--repo", repo.toString(), "--base", "main", "--head", "HEAD");
 
         assertThat(result.exitCode).isEqualTo(0);
-        assertThat(result.output).contains("Warning: No Spring Controller endpoints were found", "Possible causes");
+        assertThat(result.output).contains("No API changes detected.").doesNotContain("Warning:");
+        assertThat(result.errorOutput).contains("Warning: No Spring Controller endpoints were found", "Possible causes");
+
+        Path report = tempDir.resolve("empty-api.json");
+        CommandResult reportResult = runCheck(
+            "--repo", repo.toString(),
+            "--base", "main",
+            "--head", "HEAD",
+            "--format", "json",
+            "--report", report.toString(),
+            "--quiet");
+
+        assertThat(reportResult.exitCode).isZero();
+        assertThat(reportResult.output).isEmpty();
+        assertThat(reportResult.errorOutput).contains(
+            "Warning: No Spring Controller endpoints were found",
+            "Wrote report:");
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().readTree(report.toFile()).has("summary")).isTrue();
     }
 
     @Test
@@ -435,6 +491,46 @@ class CheckCommandTest {
         assertThat(result.output).isEmpty();
         assertThat(result.errorOutput).contains("Duplicate endpoint IDs detected:", "GET /duplicate");
         assertThat(new String(Files.readAllBytes(report), StandardCharsets.UTF_8)).isEqualTo("existing");
+    }
+
+    @Test
+    void writesPureJsonToStdoutWhenNoReportIsRequested() throws Exception {
+        Path repo = initRepoWithFixture("demo-v1");
+        copyFixture("demo-v2", repo);
+
+        CommandResult result = runCheck(
+            "--repo", repo.toString(),
+            "--base", "main",
+            "--worktree",
+            "--format", "json",
+            "--quiet");
+
+        assertThat(result.exitCode).isZero();
+        assertThat(result.errorOutput).isEmpty();
+        com.fasterxml.jackson.databind.JsonNode json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(result.output);
+        assertThat(json.has("summary")).isTrue();
+        assertThat(json.has("changes")).isTrue();
+        assertThat(result.output).doesNotContain("API compatibility check", "Wrote report:");
+    }
+
+    @Test
+    void keepsStdoutEmptyWhenJsonReportIsRequested() throws Exception {
+        Path repo = initRepoWithFixture("demo-v1");
+        copyFixture("demo-v2", repo);
+        Path report = tempDir.resolve("check-report.json");
+
+        CommandResult result = runCheck(
+            "--repo", repo.toString(),
+            "--base", "main",
+            "--worktree",
+            "--format", "json",
+            "--quiet",
+            "--report", report.toString());
+
+        assertThat(result.exitCode).isZero();
+        assertThat(result.output).isEmpty();
+        assertThat(result.errorOutput).contains("Wrote report:");
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().readTree(report.toFile()).has("summary")).isTrue();
     }
 
     private Path initRepoWithFixture(String fixture) throws Exception {

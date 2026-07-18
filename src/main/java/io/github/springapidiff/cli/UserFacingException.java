@@ -6,4 +6,8 @@ class UserFacingException extends IOException {
     UserFacingException(String message) {
         super(message);
     }
+
+    UserFacingException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

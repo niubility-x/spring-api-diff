@@ -29,6 +29,40 @@ class SnapshotCommandTest {
         assertThat(new String(Files.readAllBytes(output), StandardCharsets.UTF_8)).isEqualTo("existing");
     }
 
+    @Test
+    void writesSnapshotWithSuccessMessageOnStderr() throws Exception {
+        Path output = tempDir.resolve("snapshot.json");
+
+        CommandResult result = execute(
+            "--project", "src/test/resources/fixtures/demo-v1",
+            "--out", output.toString());
+
+        assertThat(result.exitCode).isZero();
+        assertThat(result.output).isEmpty();
+        assertThat(result.error).contains("Wrote snapshot:");
+        assertThat(output).exists();
+    }
+
+    @Test
+    void returnsTwoForFormatAndProjectInputErrors() throws Exception {
+        Path output = tempDir.resolve("snapshot.json");
+
+        CommandResult format = execute(
+            "--project", "src/test/resources/fixtures/demo-v1",
+            "--out", output.toString(),
+            "--format", "yaml");
+        assertThat(format.exitCode).isEqualTo(2);
+        assertThat(format.error).contains("Unsupported snapshot format");
+        assertThat(output).doesNotExist();
+
+        CommandResult project = execute(
+            "--project", tempDir.resolve("missing").toString(),
+            "--out", output.toString());
+        assertThat(project.exitCode).isEqualTo(2);
+        assertThat(project.error).contains("Project path is not a directory");
+        assertThat(output).doesNotExist();
+    }
+
     private CommandResult execute(String... args) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         ByteArrayOutputStream error = new ByteArrayOutputStream();

@@ -48,6 +48,31 @@ class SnapshotValidatorTest {
     }
 
     @Test
+    void rejectsMissingSnapshotStructureWithFieldPath() {
+        assertThatThrownBy(() -> validator.validate(null))
+            .isInstanceOf(InvalidSnapshotException.class)
+            .hasMessage("Invalid snapshot: snapshot must not be null.");
+
+        ApiSnapshot missingEndpoints = snapshot();
+        missingEndpoints.setEndpoints(null);
+        assertThatThrownBy(() -> validator.validate(missingEndpoints))
+            .isInstanceOf(InvalidSnapshotException.class)
+            .hasMessage("Invalid snapshot: endpoints must be an array.");
+
+        Endpoint missingRequest = endpoint("GET /users", "UserController", "list");
+        missingRequest.setRequest(null);
+        assertThatThrownBy(() -> validator.validate(snapshot(missingRequest)))
+            .isInstanceOf(InvalidSnapshotException.class)
+            .hasMessage("Invalid snapshot: endpoints[0].request must not be null.");
+
+        Endpoint missingResponse = endpoint("GET /users", "UserController", "list");
+        missingResponse.setResponse(null);
+        assertThatThrownBy(() -> validator.validate(snapshot(missingResponse)))
+            .isInstanceOf(InvalidSnapshotException.class)
+            .hasMessage("Invalid snapshot: endpoints[0].response must not be null.");
+    }
+
+    @Test
     void preservesIdenticalDuplicateOccurrences() {
         ApiSnapshot snapshot = snapshot(
             endpoint("GET /users", "UserController", "list"),

@@ -1,5 +1,6 @@
 package io.github.springapidiff.cli;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
@@ -20,8 +21,10 @@ class CheckConfigLoader {
         try {
             CheckConfig config = mapper.readValue(configPath.toFile(), CheckConfig.class);
             return config == null ? new CheckConfig() : config;
+        } catch (JsonProcessingException e) {
+            throw new UserFacingException("Invalid " + CONFIG_FILE + ": " + e.getOriginalMessage(), e);
         } catch (IOException e) {
-            throw new UserFacingException("Failed to read " + CONFIG_FILE + ": " + e.getMessage());
+            throw new UserFacingException("Failed to read " + configPath.toAbsolutePath().normalize() + ": " + e.getMessage(), e);
         }
     }
 }

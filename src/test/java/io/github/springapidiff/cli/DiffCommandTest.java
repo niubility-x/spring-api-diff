@@ -44,6 +44,77 @@ class DiffCommandTest {
         assertThat(new String(Files.readAllBytes(report), StandardCharsets.UTF_8)).isEqualTo("existing");
     }
 
+    @Test
+    void writesPureJsonToStdoutAndReportSuccessToStderr() throws Exception {
+        Path oldSnapshot = tempDir.resolve("json-old.json");
+        Path newSnapshot = tempDir.resolve("json-new.json");
+        new SnapshotWriter().write(snapshot(Collections.singletonList(endpoint("GET /users", "list"))), oldSnapshot);
+        new SnapshotWriter().write(snapshot(Collections.singletonList(endpoint("POST /users", "create"))), newSnapshot);
+
+        CommandResult stdout = execute(
+            "--old", oldSnapshot.toString(),
+            "--new", newSnapshot.toString(),
+            "--format", "json");
+        assertThat(stdout.exitCode).isZero();
+        assertThat(stdout.error).isEmpty();
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().readTree(stdout.output).has("summary")).isTrue();
+
+        Path report = tempDir.resolve("report.json");
+        CommandResult file = execute(
+            "--old", oldSnapshot.toString(),
+            "--new", newSnapshot.toString(),
+            "--format", "json",
+            "--report", report.toString());
+        assertThat(file.exitCode).isZero();
+        assertThat(file.output).isEmpty();
+        assertThat(file.error).contains("Wrote report:");
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().readTree(report.toFile()).has("summary")).isTrue();
+    }
+
+    @Test
+    void returnsTwoForMissingAndInvalidSnapshotInput() throws Exception {
+        Path valid = tempDir.resolve("valid.json");
+        new SnapshotWriter().write(snapshot(Collections.singletonList(endpoint("GET /users", "list"))), valid);
+
+        CommandResult missing = execute(
+            "--old", tempDir.resolve("missing.json").toString(),
+            "--new", valid.toString());
+        assertThat(missing.exitCode).isEqualTo(2);
+        assertThat(missing.output).isEmpty();
+        assertThat(missing.error).contains("The old snapshot is not a file");
+
+        Path invalid = tempDir.resolve("invalid.json");
+        Files.write(invalid, "{invalid".getBytes(StandardCharsets.UTF_8));
+        CommandResult malformed = execute(
+            "--old", valid.toString(),
+            "--new", invalid.toString());
+        assertThat(malformed.exitCode).isEqualTo(2);
+        assertThat(malformed.output).isEmpty();
+        assertThat(malformed.error).contains("Invalid new snapshot JSON");
+
+        Path nullSnapshot = tempDir.resolve("null.json");
+        Files.write(nullSnapshot, "null".getBytes(StandardCharsets.UTF_8));
+        CommandResult nullResult = execute(
+            "--old", valid.toString(),
+            "--new", nullSnapshot.toString());
+        assertThat(nullResult.exitCode).isEqualTo(2);
+        assertThat(nullResult.output).isEmpty();
+        assertThat(nullResult.error)
+            .contains("Invalid snapshot: snapshot must not be null")
+            .doesNotContain("NullPointerException", "at io.github");
+
+        Path missingEndpoints = tempDir.resolve("missing-endpoints.json");
+        Files.write(missingEndpoints, "{}".getBytes(StandardCharsets.UTF_8));
+        CommandResult structure = execute(
+            "--old", valid.toString(),
+            "--new", missingEndpoints.toString());
+        assertThat(structure.exitCode).isEqualTo(2);
+        assertThat(structure.output).isEmpty();
+        assertThat(structure.error)
+            .contains("Invalid snapshot: endpoints must be an array")
+            .doesNotContain("NullPointerException", "at io.github");
+    }
+
     private void writeDuplicateSnapshot(Path path) throws Exception {
         ApiSnapshot snapshot = snapshot(Arrays.asList(
             endpoint("GET /users", "first"),

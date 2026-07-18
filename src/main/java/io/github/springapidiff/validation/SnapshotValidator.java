@@ -15,6 +15,7 @@ public class SnapshotValidator {
     }
 
     public void validate(ApiSnapshot snapshot, Function<Endpoint, String> sourceProvider) {
+        validateStructure(snapshot);
         Map<String, List<Occurrence>> byId = new TreeMap<>();
         for (Endpoint endpoint : snapshot.endpoints()) {
             byId.computeIfAbsent(endpoint.id(), ignored -> new ArrayList<>())
@@ -37,6 +38,47 @@ public class SnapshotValidator {
         if (!conflicts.isEmpty()) {
             throw new DuplicateEndpointIdException(message(conflicts));
         }
+    }
+
+    private void validateStructure(ApiSnapshot snapshot) {
+        if (snapshot == null) {
+            invalid("snapshot", "must not be null");
+        }
+        if (snapshot.endpoints() == null) {
+            invalid("endpoints", "must be an array");
+        }
+        for (int index = 0; index < snapshot.endpoints().size(); index++) {
+            Endpoint endpoint = snapshot.endpoints().get(index);
+            String path = "endpoints[" + index + "]";
+            if (endpoint == null) {
+                invalid(path, "must not be null");
+            }
+            if (endpoint.id() == null || endpoint.id().trim().isEmpty()) {
+                invalid(path + ".id", "must not be blank");
+            }
+            if (endpoint.request() == null) {
+                invalid(path + ".request", "must not be null");
+            }
+            if (endpoint.response() == null) {
+                invalid(path + ".response", "must not be null");
+            }
+            if (endpoint.request().pathVariables() == null) {
+                invalid(path + ".request.pathVariables", "must be an array");
+            }
+            if (endpoint.request().queryParams() == null) {
+                invalid(path + ".request.queryParams", "must be an array");
+            }
+            if (endpoint.request().body() != null && endpoint.request().body().fields() == null) {
+                invalid(path + ".request.body.fields", "must be an array");
+            }
+            if (endpoint.response().fields() == null) {
+                invalid(path + ".response.fields", "must be an array");
+            }
+        }
+    }
+
+    private void invalid(String path, String reason) {
+        throw new InvalidSnapshotException("Invalid snapshot: " + path + " " + reason + ".");
     }
 
     private String message(Map<String, List<Occurrence>> conflicts) {

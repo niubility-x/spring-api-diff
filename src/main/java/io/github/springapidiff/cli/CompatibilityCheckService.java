@@ -77,15 +77,13 @@ class CompatibilityCheckService {
     }
 
     private GitCheckout checkoutRef(Path repoRoot, String ref, String label) throws IOException, InterruptedException {
-        String commit;
-        try {
-            commit = gitClient.output(repoRoot, "rev-parse", "--verify", ref + "^{commit}").trim();
-        } catch (IOException e) {
+        GitClient.CommandResult result = gitClient.execute(repoRoot, false, "rev-parse", "--verify", ref + "^{commit}");
+        if (result.exitCode() != 0) {
             throw new UserFacingException(
                 "Git ref not found: " + ref + "\n"
                     + "Check the branch, tag, or commit exists locally. If it is a remote branch, run git fetch first.");
         }
-        return GitCheckout.temporary(gitClient, repoRoot, commit, label);
+        return GitCheckout.temporary(gitClient, repoRoot, result.output().trim(), label);
     }
 
     private ApiSnapshot scanSnapshot(
@@ -99,17 +97,13 @@ class CompatibilityCheckService {
         Map<Endpoint, String> sources = new IdentityHashMap<>();
         for (Path path : paths) {
             String source = modulePath(checkoutRoot, path);
-            try {
-                ApiSnapshot snapshot = scanner.scan(path, includes, excludes, source);
-                snapshots.add(snapshot);
-                for (Endpoint endpoint : snapshot.endpoints()) {
-                    sources.put(endpoint, source);
-                }
-            } catch (IOException e) {
-                if (e.getMessage() != null && e.getMessage().contains("Java source root not found")) {
-                    throw scanPathResolver.sourceRootNotFound(ref);
-                }
-                throw e;
+            if (!java.nio.file.Files.isDirectory(path.resolve("src/main/java"))) {
+                throw scanPathResolver.sourceRootNotFound(ref);
+            }
+            ApiSnapshot snapshot = scanner.scan(path, includes, excludes, source);
+            snapshots.add(snapshot);
+            for (Endpoint endpoint : snapshot.endpoints()) {
+                sources.put(endpoint, source);
             }
         }
         if (snapshots.size() == 1) {

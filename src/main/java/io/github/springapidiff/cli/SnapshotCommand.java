@@ -4,6 +4,7 @@ import io.github.springapidiff.io.SnapshotWriter;
 import io.github.springapidiff.model.ApiSnapshot;
 import io.github.springapidiff.scanner.ProjectScanner;
 import io.github.springapidiff.validation.DuplicateEndpointIdException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,17 +32,29 @@ public class SnapshotCommand implements Callable<Integer> {
 
     @Override
     public Integer call() throws Exception {
-        if (!"json".equals(format.toLowerCase(Locale.ROOT))) {
-            throw new IllegalArgumentException("Unsupported snapshot format: " + format);
-        }
         try {
+            validateInput();
             ApiSnapshot snapshot = new ProjectScanner().scan(project, includes, excludes);
             new SnapshotWriter().write(snapshot, out);
-            System.out.println("Wrote snapshot: " + out.toAbsolutePath());
+            System.err.println("Wrote snapshot: " + out.toAbsolutePath());
             return 0;
-        } catch (DuplicateEndpointIdException e) {
+        } catch (UserFacingException | DuplicateEndpointIdException e) {
             System.err.println(e.getMessage());
             return 2;
+        }
+    }
+
+    private void validateInput() throws UserFacingException {
+        if (!"json".equals(format.toLowerCase(Locale.ROOT))) {
+            throw new UserFacingException("Unsupported snapshot format: " + format + ". Supported: json");
+        }
+        Path projectPath = project.toAbsolutePath().normalize();
+        if (!Files.isDirectory(projectPath)) {
+            throw new UserFacingException("Project path is not a directory: " + projectPath);
+        }
+        Path sourceRoot = projectPath.resolve("src/main/java");
+        if (!Files.isDirectory(sourceRoot)) {
+            throw new UserFacingException("Java source root not found: " + sourceRoot);
         }
     }
 }

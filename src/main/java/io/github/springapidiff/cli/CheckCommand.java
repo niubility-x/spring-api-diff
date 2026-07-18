@@ -7,6 +7,7 @@ import io.github.springapidiff.report.ChangeAdvice;
 import io.github.springapidiff.report.JsonReportWriter;
 import io.github.springapidiff.report.MarkdownReportWriter;
 import io.github.springapidiff.validation.DuplicateEndpointIdException;
+import io.github.springapidiff.validation.InvalidSnapshotException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -55,7 +56,7 @@ public class CheckCommand implements Callable<Integer> {
     @Option(names = "--exclude-module", description = "Exclude auto-discovered modules whose path matches this glob.")
     private List<String> excludeModules = new ArrayList<>();
 
-    @Option(names = "--report", description = "Markdown report output file. Prints a summary to stdout either way.")
+    @Option(names = "--report", description = "Report output file. When set, stdout remains empty.")
     private Path report;
 
     @Option(names = "--fail-on-breaking", description = "Return non-zero when breaking changes are found.")
@@ -83,7 +84,7 @@ public class CheckCommand implements Callable<Integer> {
     public Integer call() throws Exception {
         try {
             return run();
-        } catch (UserFacingException | DuplicateEndpointIdException e) {
+        } catch (UserFacingException | DuplicateEndpointIdException | InvalidSnapshotException e) {
             System.err.println(e.getMessage());
             return 2;
         }
@@ -137,16 +138,8 @@ public class CheckCommand implements Callable<Integer> {
         CheckResult result = new CompatibilityCheckService(gitClient)
             .check(request, (step, total, message) -> progress(effectiveQuiet, step, total, message));
 
-        System.out.print(writeConsoleSummary(
-            result.changes(),
-            baseSelection,
-            headRef,
-            repoRoot,
-            result.headCheckoutPath(),
-            result.headScanPaths(),
-            result.oldSnapshot(),
-            result.newSnapshot()));
-        writeReportIfRequested(result.changes(), effectiveReport, normalizedFormat);
+        writeEmptyScanWarning(result.oldSnapshot(), result.newSnapshot());
+        writeOutput(result, baseSelection, headRef, repoRoot, effectiveReport, normalizedFormat);
 
         boolean hasBreaking = result.changes().stream().anyMatch(change -> change.severity() == Severity.BREAKING);
         return effectiveFailOnBreaking && hasBreaking ? 1 : 0;
@@ -159,13 +152,21 @@ public class CheckCommand implements Callable<Integer> {
     }
 
     private Path resolveRepoRoot(Path repoPath) throws IOException, InterruptedException {
+        if (!Files.isDirectory(repoPath)) {
+            throw new UserFacingException("Git repository path is not a directory: " + repoPath);
+        }
+        GitClient.CommandResult result;
         try {
-            return gitClient.pathOutput(repoPath, "rev-parse", "--show-toplevel");
+            result = gitClient.execute(repoPath, false, "rev-parse", "--show-toplevel");
         } catch (IOException e) {
+            throw new UserFacingException("Failed to inspect Git repository: " + repoPath + "\n" + e.getMessage(), e);
+        }
+        if (result.exitCode() != 0) {
             throw new UserFacingException(
                 "The path is not a Git repository: " + repoPath + "\n"
                     + "Run this command from a Spring Boot project repository root, or pass --repo <path>.");
         }
+        return Paths.get(result.output().trim()).toAbsolutePath().normalize();
     }
 
     protected Map<String, String> environment() {
@@ -204,17 +205,36 @@ public class CheckCommand implements Callable<Integer> {
         return !gitClient.output(repoRoot, "status", "--porcelain").trim().isEmpty();
     }
 
-    private void writeReportIfRequested(List<Change> changes, Path effectiveReport, String normalizedFormat) throws IOException {
-        if (effectiveReport == null) {
+    private void writeOutput(
+        CheckResult result,
+        BaseSelection baseSelection,
+        String headRef,
+        Path repoRoot,
+        Path effectiveReport,
+        String normalizedFormat) throws IOException {
+        if (effectiveReport != null) {
+            String output = writeReport(result.changes(), normalizedFormat);
+            Path parent = effectiveReport.toAbsolutePath().getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            Files.write(effectiveReport, output.getBytes(StandardCharsets.UTF_8));
+            System.err.println("Wrote report: " + effectiveReport.toAbsolutePath());
             return;
         }
-        Path parent = effectiveReport.toAbsolutePath().getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
+        if ("json".equals(normalizedFormat)) {
+            System.out.print(new JsonReportWriter().write(result.changes()));
+            return;
         }
-        String output = writeReport(changes, normalizedFormat);
-        Files.write(effectiveReport, output.getBytes(StandardCharsets.UTF_8));
-        System.out.println("Wrote report: " + effectiveReport.toAbsolutePath());
+        System.out.print(writeConsoleSummary(
+            result.changes(),
+            baseSelection,
+            headRef,
+            repoRoot,
+            result.headCheckoutPath(),
+            result.headScanPaths(),
+            result.oldSnapshot(),
+            result.newSnapshot()));
     }
 
     private String writeReport(List<Change> changes, String normalizedFormat) throws IOException {
@@ -245,7 +265,6 @@ public class CheckCommand implements Callable<Integer> {
         summary.append("- WARNING: ").append(count(changes, Severity.WARNING)).append("\n");
         summary.append("- NON_BREAKING: ").append(count(changes, Severity.NON_BREAKING)).append("\n\n");
 
-        appendEmptyScanWarning(summary, oldSnapshot, newSnapshot);
         if (changes.isEmpty()) {
             summary.append("No API changes detected.\n");
             return summary.toString();
@@ -271,24 +290,25 @@ public class CheckCommand implements Callable<Integer> {
         return displayPath.toString().isEmpty() ? "." : displayPath.toString().replace('\\', '/');
     }
 
-    private void appendEmptyScanWarning(StringBuilder summary, ApiSnapshot oldSnapshot, ApiSnapshot newSnapshot) {
+    private void writeEmptyScanWarning(ApiSnapshot oldSnapshot, ApiSnapshot newSnapshot) {
         if (!oldSnapshot.endpoints().isEmpty() && !newSnapshot.endpoints().isEmpty()) {
             return;
         }
-        summary.append("Warning: No Spring Controller endpoints were found in ");
+        StringBuilder warning = new StringBuilder("Warning: No Spring Controller endpoints were found in ");
         if (oldSnapshot.endpoints().isEmpty() && newSnapshot.endpoints().isEmpty()) {
-            summary.append("base or head");
+            warning.append("base or head");
         } else if (oldSnapshot.endpoints().isEmpty()) {
-            summary.append("base");
+            warning.append("base");
         } else {
-            summary.append("head");
+            warning.append("head");
         }
-        summary.append(".\n");
-        summary.append("Possible causes:\n");
-        summary.append("- Controllers are not under src/main/java.\n");
-        summary.append("- Controllers do not use supported Spring MVC annotations.\n");
-        summary.append("- --include / --exclude filtered all controllers.\n");
-        summary.append("- This is a multi-module project; pass --module <module-path>.\n\n");
+        warning.append(".\n");
+        warning.append("Possible causes:\n");
+        warning.append("- Controllers are not under src/main/java.\n");
+        warning.append("- Controllers do not use supported Spring MVC annotations.\n");
+        warning.append("- --include / --exclude filtered all controllers.\n");
+        warning.append("- This is a multi-module project; pass --module <module-path>.");
+        System.err.println(warning);
     }
 
     private long count(List<Change> changes, Severity severity) {
