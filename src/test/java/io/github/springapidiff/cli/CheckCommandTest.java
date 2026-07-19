@@ -26,6 +26,15 @@ class CheckCommandTest {
     Path tempDir;
 
     @Test
+    void printsHelpWithoutRunningCheck() throws Exception {
+        CommandResult result = runCheck("--help");
+
+        assertThat(result.exitCode).isZero();
+        assertThat(result.output).contains("Usage:", "check", "--repo", "--fail-on-breaking");
+        assertThat(result.errorOutput).isEmpty();
+    }
+
+    @Test
     void checksCommittedGitRefsAndWritesActionableReport() throws Exception {
         Path repo = initRepoWithFixture("demo-v1");
         copyFixture("demo-v2", repo);

@@ -19,7 +19,7 @@ import java.util.concurrent.Callable;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
-@Command(name = "diff", description = "Compare two API snapshots.")
+@Command(name = "diff", mixinStandardHelpOptions = true, description = "Compare two API snapshots.")
 public class DiffCommand implements Callable<Integer> {
     @Option(names = "--old", required = true, description = "Old snapshot file.")
     private Path oldSnapshotPath;

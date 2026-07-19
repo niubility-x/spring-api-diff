@@ -40,12 +40,14 @@ class GitCheckoutTest {
         Path checkoutRoot = checkoutPath.getParent();
 
         assertThat(checkoutPath.resolve("api.txt")).hasContent("v1");
-        assertThat(gitClient.output(tempDir, "worktree", "list", "--porcelain")).contains(checkoutPath.toString().replace('\\', '/'));
+        assertThat(gitClient.output(tempDir, "worktree", "list", "--porcelain"))
+            .contains("/" + checkoutRoot.getFileName().toString() + "/base");
 
         checkout.close();
 
         assertThat(checkoutPath).doesNotExist();
         assertThat(checkoutRoot).doesNotExist();
-        assertThat(gitClient.output(tempDir, "worktree", "list", "--porcelain")).doesNotContain(checkoutPath.toString().replace('\\', '/'));
+        assertThat(gitClient.output(tempDir, "worktree", "list", "--porcelain"))
+            .doesNotContain("/" + checkoutRoot.getFileName().toString() + "/base");
     }
 }

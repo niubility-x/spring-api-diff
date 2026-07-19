@@ -13,7 +13,7 @@ import java.util.concurrent.Callable;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
-@Command(name = "snapshot", description = "Generate an API snapshot from a Spring Boot project.")
+@Command(name = "snapshot", mixinStandardHelpOptions = true, description = "Generate an API snapshot from a Spring Boot project.")
 public class SnapshotCommand implements Callable<Integer> {
     @Option(names = "--project", required = true, description = "Spring Boot project path.")
     private Path project;

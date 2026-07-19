@@ -25,6 +25,7 @@ import picocli.CommandLine.Option;
 
 @Command(
     name = "check",
+    mixinStandardHelpOptions = true,
     description = "Check Spring REST API compatibility between Git states.",
     footer = {
         "Examples:",

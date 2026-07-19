@@ -1,4 +1,5 @@
 target/
+.mvn/repository/
 .idea/
 *.iml
 *.log
